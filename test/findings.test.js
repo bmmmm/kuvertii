@@ -60,6 +60,50 @@ test('the envelope sender is not read as a hidden recipient', () => {
   assert.equal(recipients, undefined, 'the sender is nobody\'s recipient');
 });
 
+const CROWD = `From: org@example.com
+To: you@mailbox.example, ${Array.from({ length: 25 }, (_, i) => `person${i + 1}@example.org`).join(', ')}
+Date: Mon, 17 Aug 2026 10:00:00 +0000
+Message-ID: <a@example.com>
+Delivered-To: you@mailbox.example
+Received: from x by y with SMTP id z for <you@mailbox.example>; Mon, 17 Aug 2026 10:00:00 +0000
+`;
+
+test('a message sent to a crowd says what that cost the reader', () => {
+  const finding = analyse(parseHeaders(CROWD)).find((f) => f.id === 'disclosure');
+  assert.ok(finding);
+  assert.match(finding.title, /shown to 25 other people/);
+  assert.match(finding.lede, /Bcc/, 'names the thing the sender could have used');
+  assert.equal(finding.tone, 'alert');
+
+  // The reader is not counted among the people they were exposed to.
+  assert.ok(!finding.items.some((i) => i.label === 'you@mailbox.example'));
+});
+
+test('a crowd is summarised rather than listed twice', () => {
+  const findings = analyse(parseHeaders(CROWD));
+  const recipients = findings.find((f) => f.id === 'recipients');
+
+  // The delivery fields identify the reader, so the other 25 belong on the
+  // disclosure card and are counted here rather than repeated.
+  assert.equal(recipients.items.length, 2, 'the reader, plus a count');
+  assert.equal(recipients.items[0].label, 'you@mailbox.example');
+  assert.match(recipients.items[1].label, /25 further addresses/);
+
+  const listed = findings.find((f) => f.id === 'disclosure').items;
+  assert.ok(listed.length <= 7, 'and the disclosure card caps its own list too');
+  assert.match(listed.at(-1).label, /and 19 more/);
+});
+
+test('an ordinary two-party message triggers neither', () => {
+  const headers = parseHeaders(
+    'From: a@example.org\nTo: b@example.net\nDate: Mon, 17 Aug 2026 10:00:00 +0000\n'
+    + 'Message-ID: <x@example.org>\nReceived: from x by y with SMTP id z; Mon, 17 Aug 2026 10:00:00 +0000\n',
+  );
+  const ids = analyse(headers).map((f) => f.id);
+  assert.ok(!ids.includes('disclosure'), 'one recipient is not a disclosure');
+  assert.equal(analyse(headers).find((f) => f.id === 'recipients').items.length, 1);
+});
+
 test('the recipient is found in every place it hides', () => {
   const finding = byId('recipients');
   assert.ok(finding, 'recipient finding produced');

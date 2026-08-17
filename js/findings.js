@@ -32,6 +32,7 @@ export function analyse(headers) {
 
   push(completenessFinding(headers));
   push(recipientFinding(headers));
+  push(disclosureFinding(headers));
   push(trackingFinding(headers));
   push(listFinding(headers));
   push(unsubscribeFinding(headers));
@@ -63,6 +64,11 @@ const EXPECTED_FIELDS = [
 
 const RECIPIENT_PRESENT = ['to', 'cc', 'delivered-to', 'x-original-to', 'envelope-to'];
 
+// Fields naming the mailbox this copy was actually delivered to. Unlike To:,
+// which the sender writes, these are added by the receiving side — so an
+// address here is the reader, and every other name in To/Cc is somebody else.
+const DELIVERY_FIELDS = ['delivered-to', 'x-original-to', 'envelope-to', 'x-rcpt-to'];
+
 /**
  * Say so when the paste is only part of a header.
  *
@@ -93,6 +99,27 @@ function completenessFinding(headers) {
       value: cost,
     })),
   };
+}
+
+
+/**
+ * Addresses the receiving side recorded as the destination of this copy.
+ *
+ * `To:` is written by the sender and can say anything; these fields are added
+ * on delivery, so an address here is the mailbox that actually received the
+ * message. That makes it the one way to tell the reader apart from everyone
+ * else named in the header.
+ */
+function readerAddresses(headers) {
+  const reader = new Set();
+  for (const field of DELIVERY_FIELDS) {
+    for (const value of getAll(headers, field)) findAddresses(value).forEach((a) => reader.add(a));
+  }
+  for (const value of getAll(headers, 'received')) {
+    const match = value.match(/\bfor\s+<([^>]+)>/i);
+    if (match) findAddresses(match[1]).forEach((a) => reader.add(a));
+  }
+  return reader;
 }
 
 // ---------------------------------------------------------------- recipients
@@ -191,8 +218,24 @@ function recipientFinding(headers) {
   // to say the one thing prose is good for: what it means.
   const placeChips = (entries) => entries.map((e) => `${e.field} · ${e.method}`);
 
+  // On a message addressed to a crowd, listing every name turns this card into
+  // a directory and buries what it is for. The addresses that also appear
+  // encoded are the point — those identify the reader — so they are kept, a
+  // few plain ones are shown for context, and the rest is counted. The people
+  // themselves are not dropped: the disclosure card is about exactly them.
+  const OPEN_SHOWN = 4;
+  const reader = readerAddresses(headers);
+  // An address earns its own row by identifying this reader: it appears in
+  // encoded form, or the receiving side recorded it as the destination.
+  const identifying = ([address]) => hidden.has(address) || reader.has(address);
+
+  const ranked = [...open].sort((a, b) => (identifying(b) ? 1 : 0) - (identifying(a) ? 1 : 0));
+  const keep = ranked.filter(identifying).length;
+  const visible = ranked.slice(0, keep || Math.min(OPEN_SHOWN, ranked.length));
+  const omitted = ranked.length - visible.length;
+
   const items = [];
-  for (const [address, fields] of open) {
+  for (const [address, fields] of visible) {
     const encodings = hidden.get(address) ?? [];
     items.push({
       label: address,
@@ -202,6 +245,12 @@ function recipientFinding(headers) {
         ? `Carried ${encodings.length} further ${encodings.length === 1 ? 'time' : 'times'} in encoded form.`
         : null,
       emphasis: encodings.length > 0,
+    });
+  }
+  if (omitted) {
+    items.push({
+      label: `${omitted} further ${omitted === 1 ? 'address is' : 'addresses are'} named in the clear`,
+      value: 'None of them carry encoded copies, so they are other recipients rather than this one.',
     });
   }
   for (const [address, entries] of hidden) {
@@ -268,6 +317,53 @@ function foldOntoKnownRecipient(address, known) {
     if (/[-_.+]/.test(boundary ?? '')) return candidate;
   }
   return address;
+}
+
+// ---------------------------------------------------------------- disclosure
+
+/**
+ * Who else was shown your address.
+ *
+ * `To:` and `Cc:` are visible to every recipient at once, so a message with
+ * twenty names in them has handed each of those people the other nineteen. It
+ * is the most ordinary privacy failure in email and the least remarked upon —
+ * the sender had `Bcc` available and did not reach for it.
+ */
+function disclosureFinding(headers) {
+  const everyone = new Map(); // address -> field it appeared in
+  for (const field of ['to', 'cc']) {
+    for (const value of getAll(headers, field)) {
+      for (const address of findAddresses(value)) {
+        if (!everyone.has(address)) everyone.set(address, field === 'cc' ? 'Cc' : 'To');
+      }
+    }
+  }
+  if (everyone.size < 2) return null;
+
+  const reader = readerAddresses(headers);
+  const others = [...everyone].filter(([address]) => !reader.has(address));
+  if (!others.length) return null;
+
+  const inCc = others.filter(([, field]) => field === 'Cc').length;
+  const shown = others.slice(0, 6);
+
+  const items = shown.map(([address, field]) => ({ label: address, value: `named in ${field}` }));
+  if (others.length > shown.length) {
+    items.push({
+      label: `and ${others.length - shown.length} more`,
+      value: 'Listed in the same fields, and visible to everyone who received this.',
+    });
+  }
+
+  return {
+    id: 'disclosure',
+    title: `Your address was shown to ${others.length} other ${others.length === 1 ? 'person' : 'people'}`,
+    tone: others.length > 5 ? 'alert' : 'info',
+    lede: inCc
+      ? 'Everyone named in To and Cc can read every other name there, including yours. Bcc exists precisely so that this does not happen, and the sender chose not to use it — most likely without noticing.'
+      : 'Everyone named in To can read every other name there, including yours. Bcc exists precisely so that this does not happen.',
+    items,
+  };
 }
 
 // ------------------------------------------------------------------ tracking

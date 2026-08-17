@@ -20,6 +20,10 @@ unsubscribe can be attributed back to you.
   bounce address, and in mailer fields stored *backwards* so they do not read as
   text at a glance. Addresses that appear only in encoded form are called out
   separately.
+- **Who else was shown your address.** Everyone named in `To` and `Cc` can read
+  every other name there. A message sent to a crowd hands each of them the whole
+  list, which is the most ordinary privacy failure in email and the least
+  remarked upon — `Bcc` was available and went unused.
 - **That your copy is unique.** Bulk mail is not sent to a list, it is sent to
   you specifically. VERP bounce addresses, `Feedback-ID`, and per-message
   tracking ids all key back to your address. Platform-specific identifiers are
@@ -158,7 +162,7 @@ No build step, no dependencies. Node is used only to run the tests and to bake
 the blocklist.
 
 ```sh
-node --test                          # 117 tests, stdlib only
+node --test                          # 120 tests, stdlib only
 node tools/build-blocklist.mjs       # writes data/ (gitignored, built in CI)
 python3 -m http.server 8000          # then open localhost:8000
 ```
