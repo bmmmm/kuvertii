@@ -434,6 +434,15 @@ const CLIENT_IP_FIELDS = [
 
 const PRIVATE_IP_RE = /^(?:10\.|127\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|::1$|f[cd])/i;
 
+// Named in full, because `Priority` and `X-Priority` are different fields and
+// stripping the prefix would print one under the other's name.
+const URGENCY_FIELDS = [
+  ['x-priority', 'X-Priority'],
+  ['x-msmail-priority', 'X-MSMail-Priority'],
+  ['importance', 'Importance'],
+  ['priority', 'Priority'],
+];
+
 /**
  * The machine and program that composed the message.
  *
@@ -474,6 +483,23 @@ function originFinding(headers) {
       note: versioned
         ? 'Named down to the version. On personal mail this pins the sender to a specific program and release — one of the few header fields chosen by a person rather than a server.'
         : 'The program that generated the message.',
+    });
+  }
+
+  // Urgency is a claim the sender makes about their own message, which is why
+  // it belongs here rather than among the filter verdicts. Only a high setting
+  // is worth a line — normal and low are the defaults and say nothing. Stated
+  // without alarm: plenty of honest mail marks itself important, and it is the
+  // combination with an unverified sender that matters, which the reader can
+  // see for themselves one card down.
+  const urgency = URGENCY_FIELDS
+    .map(([field, name]) => [name, get(headers, field)])
+    .find(([, value]) => /^\s*(1|2|high|highest|urgent)\b/i.test(value));
+  if (urgency) {
+    items.push({
+      label: 'Marked urgent by the sender',
+      value: `${urgency[0]}: ${urgency[1]}`,
+      note: 'A self-declaration, not a verdict — the sending program set it, and nothing checked it.',
     });
   }
 
@@ -597,6 +623,31 @@ function authFinding(headers) {
     });
   }
 
+  // A length tag signs only the first l= bytes of the body. Everything after
+  // that can be appended by anyone without breaking the signature, so "DKIM
+  // passed" stops meaning "the message is intact". Rare in ordinary mail and
+  // worth naming when it appears, but reported as a property of the signature
+  // rather than as an accusation — some legitimate mailing lists set it.
+  const signedLength = dkimSignature.match(/\bl=(\d+)/)?.[1];
+  if (signedLength) {
+    items.push({
+      label: 'Only part of the message is signed',
+      value: `The signature covers the first ${Number(signedLength).toLocaleString('en')} bytes of the body.`,
+      note: 'Anything after that can be added without invalidating it, so a passing DKIM result does not vouch for the whole message.',
+      level: 'caution',
+    });
+  }
+
+  const algorithm = dkimSignature.match(/\ba=([\w-]+)/)?.[1]?.toLowerCase();
+  if (algorithm && /sha1$/.test(algorithm)) {
+    items.push({
+      label: `Signed with ${algorithm}`,
+      value: 'SHA-1 has been prohibited for DKIM since RFC 8301 in 2018, because collisions are practical.',
+      note: 'Most receivers now treat such a signature as no signature at all.',
+      level: 'caution',
+    });
+  }
+
   const allPass = Object.values(verdicts).filter((v) => v === 'pass').length >= 2;
   const failed = Object.entries(verdicts)
     .filter(([mechanism, verdict]) => DECISIVE.has(mechanism) && verdict === 'fail')
@@ -611,7 +662,15 @@ function authFinding(headers) {
         : 'Authentication results',
     tone: failed.length ? 'alert' : 'info',
     lede: allPass
-      ? 'SPF, DKIM and DMARC answer one question: is this server allowed to send for this domain? They do not ask whether the mail is wanted, honest, or from someone you have heard of. A spammer who owns their domain passes all three — this one did, and the mailbox provider still filed it as junk.'
+      // The closing clause is a claim about this specific message, so it is
+      // only made when the header actually carries a filter verdict saying so.
+      // Asserting it unconditionally told every clean message it had been
+      // filed as junk.
+      ? `SPF, DKIM and DMARC answer one question: is this server allowed to send for this domain? They do not ask whether the mail is wanted, honest, or from someone you have heard of. A spammer who owns their domain passes all three${
+        wasFiledAsSpam(headers)
+          ? ' — this one did, and the mailbox provider still filed it as junk.'
+          : ', and many do.'
+      }`
       : failed.length
         ? `${failed.join(' and ')} failed. These checks break for innocent reasons too — a forwarded message loses SPF, a mailing list rewrites the body and voids the signature. But they also fail for the obvious reason, and nothing in the header distinguishes the two. Treat the name in the From field as unverified.`
         : 'What the receiving server could verify about the sender\'s identity.',
@@ -671,6 +730,26 @@ function parseReceived(value) {
 function splitOnce(text, separator) {
   const index = text.lastIndexOf(separator);
   return index === -1 ? [text, null] : [text.slice(0, index), text.slice(index + 1)];
+}
+
+/**
+ * Did something along the way actually rule this message spam?
+ *
+ * Only used to decide whether the authentication card may say so. Deliberately
+ * narrow: a flag set to "no" is not a verdict, and an SCL below 5 is Microsoft
+ * saying the opposite.
+ */
+function wasFiledAsSpam(headers) {
+  if (/^yes\b/i.test(get(headers, 'x-spam-flag'))) return true;
+  if (/junk/i.test(get(headers, 'x-apple-action'))) return true;
+  if (/junk|spam/i.test(get(headers, 'x-apple-movetofolder'))) return true;
+  if (/^yes\b/i.test(get(headers, 'x-suspected-spam'))) return true;
+
+  const scl = Number(
+    get(headers, 'x-forefront-antispam-report').match(/\bSCL:(-?\d+)/i)?.[1]
+    ?? get(headers, 'x-ms-exchange-organization-scl'),
+  );
+  return Number.isFinite(scl) && scl >= 5;
 }
 
 // --------------------------------------------------------------- judgements

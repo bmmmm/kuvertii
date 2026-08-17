@@ -67,6 +67,7 @@ To: ${RECIPIENT}
 Subject: Action required: verify your mailbox
 Date: Mon, 17 Aug 2026 09:12:04 +0300
 User-Agent: Microsoft Outlook 16.0.17328
+X-Priority: 1 (Highest)
 X-Originating-IP: [198.51.100.77]
 Received-SPF: Fail (protection.outlook.com: domain of contoso-secure.example does not designate 198.51.100.77 as permitted sender)
 Authentication-Results: protection.outlook.com; spf=fail; dkim=none; dmarc=fail

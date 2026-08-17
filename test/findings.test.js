@@ -232,6 +232,68 @@ test('the SPF explanation is reported, not just the verdict word', () => {
   assert.match(body, /does not designate/, 'the server\'s own wording is kept');
 });
 
+test('a clean message is not told it was filed as junk', () => {
+  // The lede's closing clause is a claim about this specific message. The
+  // bulk fixture carries X-Spam-Flag, so it earns the strong wording; a
+  // message with no verdict at all must not have it asserted about them.
+  assert.match(byId('auth').lede, /still filed it as junk/, 'the fixture does carry a verdict');
+
+  const clean = parseHeaders(
+    'From: a@example.org\nTo: b@example.net\n'
+    + 'Authentication-Results: mx.example.net; spf=pass; dkim=pass; dmarc=pass\n',
+  );
+  const lede = analyse(clean).find((f) => f.id === 'auth').lede;
+  assert.doesNotMatch(lede, /filed it as junk/);
+  assert.match(lede, /many do/, 'the general point still lands');
+});
+
+test('a partially signed body is reported as such', () => {
+  // The l= tag signs only the first n bytes; the rest can be appended freely,
+  // so a passing DKIM result stops vouching for the whole message.
+  const headers = parseHeaders(
+    'DKIM-Signature: a=rsa-sha256; d=example.org; l=1024; b=AAAA\n',
+  );
+  const item = analyse(headers).find((f) => f.id === 'auth').items
+    .find((i) => /Only part/.test(i.label));
+  assert.ok(item, 'the length tag is reported');
+  assert.match(item.value, /1,024 bytes/);
+  assert.equal(item.level, 'caution');
+});
+
+test('a full signature produces no length warning', () => {
+  // The bulk fixture signs everything — the absence must stay silent.
+  const labels = byId('auth').items.map((i) => i.label);
+  assert.ok(!labels.some((l) => /Only part/.test(l)));
+});
+
+test('a deprecated signing algorithm is called out', () => {
+  const headers = parseHeaders('DKIM-Signature: a=rsa-sha1; d=example.org; b=AAAA\n');
+  const item = analyse(headers).find((f) => f.id === 'auth').items
+    .find((i) => /rsa-sha1/.test(i.label));
+  assert.ok(item);
+  assert.match(item.value, /RFC 8301|collisions/i);
+  assert.equal(item.level, 'caution');
+});
+
+test('a current signing algorithm passes without comment', () => {
+  const headers = parseHeaders('DKIM-Signature: a=ed25519-sha256; d=example.org; b=AAAA\n');
+  const labels = analyse(headers).find((f) => f.id === 'auth').items.map((i) => i.label);
+  assert.ok(!labels.some((l) => /Signed with/.test(l)));
+});
+
+test('a self-declared urgency is reported as a claim, not a verdict', () => {
+  const item = msById('origin').items.find((i) => /urgent/i.test(i.label));
+  assert.ok(item, 'X-Priority: 1 is surfaced');
+  assert.match(item.note, /self-declaration|nothing checked it/i);
+  assert.equal(item.level, undefined, 'stated plainly rather than flagged');
+});
+
+test('an ordinary priority is not mentioned at all', () => {
+  const headers = parseHeaders('X-Priority: 3 (Normal)\nX-Mailer: Thunderbird\n');
+  const finding = analyse(headers).find((f) => f.id === 'origin');
+  assert.ok(!text(finding).match(/urgent/i));
+});
+
 test('an empty input produces no findings rather than throwing', () => {
   assert.deepEqual(analyse(parseHeaders('')), []);
 });

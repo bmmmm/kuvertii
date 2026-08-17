@@ -34,7 +34,9 @@ unsubscribe can be attributed back to you.
   login-shaped destination paths.
 - **What the authentication results are worth.** SPF, DKIM and DMARC answer
   whether a server may send for a domain. They never ask whether the mail is
-  honest. Spam passes all three every day.
+  honest. Spam passes all three every day — and a signature can pass while
+  covering only the first few hundred bytes of the message, leaving the rest
+  free to be rewritten by anyone.
 - **The route it took.** Read bottom-up, the first hop is the machine that
   generated the message — frequently an API injection from a datacentre rather
   than the brand on the envelope.
@@ -149,7 +151,7 @@ No build step, no dependencies. Node is used only to run the tests and to bake
 the blocklist.
 
 ```sh
-node --test                          # 88 tests, stdlib only
+node --test                          # 96 tests, stdlib only
 node tools/build-blocklist.mjs       # writes data/ (gitignored, built in CI)
 python3 -m http.server 8000          # then open localhost:8000
 ```

@@ -48,7 +48,7 @@
       <dd>Decoded from the link, not by visiting it — plus the structural tells that separate a real opt-out from a credential trap.</dd>
 
       <dt>What the authentication results are worth</dt>
-      <dd>SPF, DKIM and DMARC ask whether a server may send for a domain. They never ask whether the mail is honest. Spam passes all three every day.</dd>
+      <dd>SPF, DKIM and DMARC ask whether a server may send for a domain. They never ask whether the mail is honest. Spam passes all three every day — and a signature can cover only the first few hundred bytes, leaving the rest free to be rewritten.</dd>
 
       <dt>The route it took</dt>
       <dd>Read from the bottom up, the first hop is the machine that generated the message — often an API call from a datacentre, not the brand on the envelope.</dd>
