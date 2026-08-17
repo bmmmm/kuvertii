@@ -1,10 +1,13 @@
 {
   "name": "kuvertii",
   "version": "1.0.0",
-  "description": "Read what an email header says about you — entirely in the browser",
+  "description": "Read what an email header says about you — in the browser or the terminal, never over the network",
   "license": "GPL-3.0-or-later",
   "private": true,
   "type": "module",
+  "bin": {
+    "kuvertii": "bin/kuvertii.js"
+  },
   "scripts": {
     "test": "node --test",
     "build:blocklist": "node tools/build-blocklist.mjs",
