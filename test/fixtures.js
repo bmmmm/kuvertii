@@ -25,6 +25,7 @@ export const CLICK_URL =
 export const BULK_HEADER = `From: Beispiel Newsletter <noreply@mail.example.email>
 Subject: Herzlich willkommen!
 To: Maja Beispiel <${RECIPIENT}>
+Date: Mon, 17 Aug 2026 17:48:35 +0000
 Reply-To: kontakt@unrelated-hotel.example
 Return-Path: <return-b443a1b34703-ddad3f5708=10@mail.example.email>
 Original-Recipient: rfc822;${RECIPIENT}
@@ -74,4 +75,8 @@ Authentication-Results: protection.outlook.com; spf=fail; dkim=none; dmarc=fail
 X-Forefront-Antispam-Report: CIP:198.51.100.77;CTRY:RU;LANG:en;SCL:9;SRV:;IPV:NLI;SFV:SPM;H:mail.contoso-secure.example;PTR:unknown;CAT:PHSH;SFTY:9.19
 X-Microsoft-Antispam: BCL:0;
 X-MS-Exchange-Organization-SCL: 9
+Message-ID: <ACT-2026-0817-VERIFY@contoso-secure.example>
+Received: from mail.contoso-secure.example (mail.contoso-secure.example [198.51.100.77])
+ by DB8PR04MB.eurprd04.prod.outlook.com with Microsoft SMTP Server id 15.20.7918.20
+ for <${RECIPIENT}>; Mon, 17 Aug 2026 06:12:10 +0000
 `;

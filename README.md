@@ -11,6 +11,10 @@ unsubscribe can be attributed back to you.
 
 ## What it finds
 
+- **Whether you pasted the whole header.** A fragment does not fail loudly — it
+  analyses fine and quietly answers a narrower question than you asked. When the
+  fields every delivered message carries are absent, that is said first, before
+  anything it qualifies.
 - **Who the message was really addressed to.** Your address is usually in `To:`
   once and encoded several more times — inside the unsubscribe token, in the
   bounce address, and in mailer fields stored *backwards* so they do not read as
@@ -154,7 +158,7 @@ No build step, no dependencies. Node is used only to run the tests and to bake
 the blocklist.
 
 ```sh
-node --test                          # 113 tests, stdlib only
+node --test                          # 117 tests, stdlib only
 node tools/build-blocklist.mjs       # writes data/ (gitignored, built in CI)
 python3 -m http.server 8000          # then open localhost:8000
 ```

@@ -16,6 +16,50 @@ const text = (finding) =>
     .map((i) => `${i.label} ${i.value} ${(i.chips ?? []).join(' ')} ${i.note ?? ''}`)
     .join('\n');
 
+test('a partial paste is reported as partial', () => {
+  // A fragment does not fail loudly — it analyses fine and quietly answers a
+  // narrower question than the reader thinks they asked.
+  const fragment = parseHeaders(
+    'Received-SPF: pass (spf.example.net: domain of news@sender.example designates 1.2.3.4 as permitted sender)\n'
+    + 'X-Apple-MoveToFolder: INBOX\n',
+  );
+  const finding = analyse(fragment).find((f) => f.id === 'completeness');
+  assert.ok(finding, 'the shortfall is reported');
+  assert.equal(analyse(fragment)[0].id, 'completeness', 'and reported first, before anything it qualifies');
+
+  const named = finding.items.map((i) => i.label).join(' ');
+  assert.match(named, /From is missing/);
+  assert.match(named, /Received is missing/);
+  assert.match(named, /To is missing/);
+});
+
+test('a full header is not accused of being partial', () => {
+  assert.equal(byId('completeness'), undefined);
+  assert.equal(msById('completeness'), undefined);
+});
+
+test('one absent field alone is not called a fragment', () => {
+  // Plenty of legitimate mail lacks a Message-ID, and a copied header often
+  // drops its last line. Only two or more absences mean a fragment.
+  const headers = parseHeaders(
+    'From: a@example.org\nTo: b@example.net\nDate: Mon, 17 Aug 2026 10:00:00 +0000\n'
+    + 'Received: from x by y with SMTP id z; Mon, 17 Aug 2026 10:00:00 +0000\n',
+  );
+  assert.equal(analyse(headers).find((f) => f.id === 'completeness'), undefined);
+});
+
+test('the envelope sender is not read as a hidden recipient', () => {
+  // Regression from a real partial paste: with no From: line, the address in
+  // envelope-from was reported as a recipient hiding in encoded form — wrong,
+  // and exactly backwards.
+  const headers = parseHeaders(
+    'Received-SPF: pass (spf.example.net: domain of notifications@sender.example '
+    + 'designates 1.2.3.4 as permitted sender) envelope-from=notifications@sender.example\n',
+  );
+  const recipients = analyse(headers).find((f) => f.id === 'recipients');
+  assert.equal(recipients, undefined, 'the sender is nobody\'s recipient');
+});
+
 test('the recipient is found in every place it hides', () => {
   const finding = byId('recipients');
   assert.ok(finding, 'recipient finding produced');
@@ -354,6 +398,9 @@ test('an empty input produces no findings rather than throwing', () => {
 
 test('a minimal header produces only what it can support', () => {
   const findings = analyse(parseHeaders('From: a@example.org\nTo: b@example.net\n'));
-  assert.deepEqual(findings.map((f) => f.id), ['recipients']);
-  assert.equal(findings[0].tone, 'info', 'nothing hidden, so no alarm');
+  // Two lines are a fragment, and saying so is the first thing to report.
+  assert.deepEqual(findings.map((f) => f.id), ['completeness', 'recipients']);
+
+  const recipients = findings.find((f) => f.id === 'recipients');
+  assert.equal(recipients.tone, 'info', 'nothing hidden, so no alarm');
 });

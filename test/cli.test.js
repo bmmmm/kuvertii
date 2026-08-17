@@ -81,7 +81,9 @@ test('input that is not a header is reported, not crashed on', async () => {
   const { code, stdout, stderr } = await cli([], 'just some prose with no colon-led fields\n');
   assert.equal(code, 0);
   assert.equal(stderr, '');
-  assert.match(stdout, /found nothing noteworthy/);
+  // It is read, and the reader is told plainly that this was not a header.
+  assert.match(stdout, /part of a header, not all of it/);
+  assert.match(stdout, /From is missing/);
 });
 
 test('empty stdin says so and exits non-zero', async () => {

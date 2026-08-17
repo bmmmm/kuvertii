@@ -30,6 +30,7 @@ export function analyse(headers) {
   const findings = [];
   const push = (f) => { if (f) findings.push(f); };
 
+  push(completenessFinding(headers));
   push(recipientFinding(headers));
   push(trackingFinding(headers));
   push(listFinding(headers));
@@ -43,6 +44,57 @@ export function analyse(headers) {
   return findings;
 }
 
+// -------------------------------------------------------------- completeness
+
+/**
+ * Fields every delivered message carries, and what their absence costs.
+ *
+ * Missing one of these never means the message lacked it — it means the paste
+ * stopped short. Which matters, because a partial header does not fail loudly:
+ * it analyses fine and quietly answers a narrower question than the reader
+ * thinks they asked.
+ */
+const EXPECTED_FIELDS = [
+  ['from', 'From', 'without it, the sender is unknown, and addresses belonging to them can be mistaken for yours'],
+  ['date', 'Date', 'no timezone, and no way to place the message in time'],
+  ['message-id', 'Message-ID', 'the per-message identifier is missing'],
+  ['received', 'Received', 'the route is missing entirely — that is usually the bulk of a header'],
+];
+
+const RECIPIENT_PRESENT = ['to', 'cc', 'delivered-to', 'x-original-to', 'envelope-to'];
+
+/**
+ * Say so when the paste is only part of a header.
+ *
+ * Placed first deliberately. Everything below reports on what it was given, and
+ * a reader who cannot see that half the header is absent will read those
+ * findings as the whole answer.
+ */
+function completenessFinding(headers) {
+  if (!headers.length) return null;
+
+  const missing = EXPECTED_FIELDS.filter(([field]) => !get(headers, field));
+  if (!RECIPIENT_PRESENT.some((field) => get(headers, field))) {
+    missing.push(['to', 'To', 'no recipient is named in the clear, so there is nothing to compare the encoded copies against']);
+  }
+
+  // One absent field is ordinary — plenty of legitimate mail has no Message-ID
+  // from a badly behaved sender, and a copied header often drops its last line.
+  // Two or more mean the paste is a fragment.
+  if (missing.length < 2) return null;
+
+  return {
+    id: 'completeness',
+    title: 'This looks like part of a header, not all of it',
+    tone: 'info',
+    lede: `A delivered message always carries these fields, so their absence is a property of the paste rather than of the message. Everything below still holds for what was given — it is just answering a narrower question than it appears to. Copying the full header (Apple Mail: View → Message → All Headers; Gmail: Show original) usually turns ${headers.length} ${headers.length === 1 ? 'field' : 'fields'} into several dozen.`,
+    items: missing.map(([, name, cost]) => ({
+      label: `${name} is missing`,
+      value: cost,
+    })),
+  };
+}
+
 // ---------------------------------------------------------------- recipients
 
 function recipientFinding(headers) {
@@ -53,6 +105,20 @@ function recipientFinding(headers) {
   for (const field of SENDER_FIELDS) {
     for (const value of getAll(headers, field)) {
       findAddresses(value).forEach((a) => senderAddresses.add(a));
+    }
+  }
+
+  // The authentication headers name the envelope sender in passing, and that
+  // matters most when the paste has lost its From: line — a partial header
+  // otherwise reports the sender as a recipient hiding in encoded form, which
+  // is both wrong and exactly backwards.
+  for (const field of ['received-spf', 'authentication-results']) {
+    for (const value of getAll(headers, field)) {
+      for (const [, claimed] of value.matchAll(
+        /\b(?:envelope-from|smtp\.mailfrom|header\.from)\s*=\s*([^\s;,)]+)/gi,
+      )) {
+        findAddresses(claimed).forEach((a) => senderAddresses.add(a));
+      }
     }
   }
 
