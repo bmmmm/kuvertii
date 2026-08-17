@@ -92,6 +92,12 @@ const ANSI = {
 const TONE_COLOUR = { alert: ANSI.red, info: ANSI.blue, neutral: ANSI.dim };
 const LEVEL_COLOUR = { bad: ANSI.red, good: ANSI.green, caution: ANSI.yellow };
 
+// A verdict carries a mark as well as a colour, so that it survives everything
+// that loses colour: a pipe, --no-colour, NO_COLOR, a monochrome terminal, or
+// a reader who cannot distinguish red from green. All three are single-width,
+// which keeps the labels aligned.
+const LEVEL_MARK = { bad: '✗', good: '✓', caution: '!' };
+
 /**
  * Build a renderer.
  *
@@ -131,7 +137,7 @@ export function createRenderer({ colour = true, width = 80 } = {}) {
   const renderItem = (item, seenNotes) => {
     const out = [];
     const colourFor = LEVEL_COLOUR[item.level] ?? '';
-    const marker = item.emphasis || item.level ? '▸' : '·';
+    const marker = LEVEL_MARK[item.level] ?? (item.emphasis ? '▸' : '·');
 
     // Labels are defanged as well, which is not decoration: a blocklist verdict
     // puts the offending hostname in the label — `evil.example is on a phishing

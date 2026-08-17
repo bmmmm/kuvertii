@@ -103,6 +103,36 @@ test('the unsubscribe destination is reported, but defanged', () => {
   assert.match(out, /\[\.\]/, 'and it is bracketed');
 });
 
+test('a verdict is marked, not only coloured', () => {
+  // Colour is lost down a pipe, under NO_COLOR, on a monochrome terminal, and
+  // for anyone who cannot tell red from green. The mark has to carry it.
+  const rendered = plain.renderFinding({
+    id: 'x',
+    title: 'Checks',
+    tone: 'info',
+    items: [
+      { label: 'SPF = pass', value: 'authorised', level: 'good' },
+      { label: 'SPF = fail', value: 'not authorised', level: 'bad' },
+      { label: 'Filtering skipped', value: 'a rule matched', level: 'caution' },
+      { label: 'Signed by domain', value: 'example.org' },
+    ],
+  });
+  assert.match(rendered, /✓ SPF = pass/);
+  assert.match(rendered, /✗ SPF = fail/);
+  assert.match(rendered, /! Filtering skipped/);
+  assert.match(rendered, /· Signed by domain/, 'a plain row keeps the plain marker');
+  assert.doesNotMatch(rendered, /\x1b\[/, 'and none of this needed colour');
+});
+
+test('the marks the page uses match the ones the terminal prints', async () => {
+  // Two renderers, one vocabulary — a reader moving between them should not
+  // have to learn a second set of symbols.
+  const css = await readFile(new URL('../css/style.css', import.meta.url), 'utf8');
+  assert.match(css, /\.item--good \.item__label::before \{ content: "✓"/);
+  assert.match(css, /\.item--bad \.item__label::before \{ content: "✗"/);
+  assert.match(css, /\.item--caution \.item__label::before \{ content: "!"/);
+});
+
 test('colour is omitted entirely when switched off', () => {
   assert.doesNotMatch(renderAll(MICROSOFT_HEADER), /\x1b\[/);
 });

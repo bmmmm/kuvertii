@@ -196,6 +196,21 @@ button.primary {
 .item--bad .item__label { color: var(--bad); }
 .item--good .item__label { color: var(--good); }
 
+/* A verdict is marked as well as coloured. Colour alone fails for anyone who
+   cannot tell red from green, and it is the one distinction on this page that
+   changes what a reader should do. Same three marks the terminal build uses. */
+.item--good .item__label::before,
+.item--bad .item__label::before,
+.item--caution .item__label::before {
+  display: inline-block;
+  width: 1.1em;
+  font-weight: 700;
+}
+
+.item--good .item__label::before { content: "✓"; color: var(--good); }
+.item--bad .item__label::before { content: "✗"; color: var(--bad); }
+.item--caution .item__label::before { content: "!"; color: var(--caution); }
+
 .item__value {
   margin-top: 0.15rem;
   color: var(--ink-soft);
