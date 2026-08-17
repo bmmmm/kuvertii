@@ -6,6 +6,7 @@
 
 import { bestDecode, decodeSegments, findAddresses, prettifyNulls } from './decode.js';
 import { extractUrls, inspectUnsubscribeLink, registrableDomain } from './links.js';
+import { microsoftVerdicts } from './microsoft.js';
 import { identifyPlatformHeader, identifySender } from './senders.js';
 import { get, getAll } from './unfold.js';
 
@@ -647,12 +648,14 @@ function judgementFinding(headers) {
     if (value) items.push({ label, value });
   }
 
+  items.push(...microsoftVerdicts(headers));
+
   if (!items.length) return null;
 
   return {
     id: 'judgement',
     title: 'Someone already made up their mind',
-    tone: 'neutral',
+    tone: items.some((i) => i.level === 'bad') ? 'alert' : 'neutral',
     lede: 'Filters along the way left their verdicts in the header. These are opinions, not facts — but they are the opinions that decided which folder this landed in.',
     items,
   };

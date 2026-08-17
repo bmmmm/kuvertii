@@ -175,6 +175,33 @@ test('a private client IP is not treated as an exposed address', () => {
   assert.match(item.note, /private/i);
 });
 
+test('microsoft 365 verdicts are decoded into words', () => {
+  const finding = msById('judgement');
+  assert.ok(finding);
+  assert.equal(finding.tone, 'alert', 'a phishing verdict raises the card');
+
+  const body = text(finding);
+  assert.match(body, /Spam Confidence Level 9/);
+  assert.match(body, /high confidence/i);
+  assert.match(body, /phishing/i, 'CAT:PHSH translated');
+  assert.match(body, /domain impersonation/i, 'SFTY 9.19 translated');
+  assert.match(body, /RU/, 'connecting country reported');
+});
+
+test('skipped filtering is flagged rather than read as a pass', () => {
+  // SCL:-1 with SFV:SKN is what a mail flow rule looks like from the inside.
+  const headers = parseHeaders(
+    'X-Forefront-Antispam-Report: SCL:-1;SFV:SKN;CAT:NONE\n',
+  );
+  const items = analyse(headers).find((f) => f.id === 'judgement').items;
+  assert.ok(items.every((i) => i.level !== 'good'), 'never reported as clean');
+
+  const scl = items.find((i) => /Confidence Level/.test(i.label));
+  assert.equal(scl.level, 'caution');
+  assert.match(scl.value, /skipped/i);
+  assert.match(text({ items }), /before any check ran/, 'SFV:SKN explained');
+});
+
 test('an empty input produces no findings rather than throwing', () => {
   assert.deepEqual(analyse(parseHeaders('')), []);
 });
