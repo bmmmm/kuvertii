@@ -36,7 +36,13 @@
       <dd>Your address is usually in <code>To:</code> once and encoded three more times — in the unsubscribe token, the bounce address, and mailer fields stored backwards so they do not read as text.</dd>
 
       <dt>That your copy is yours alone</dt>
-      <dd>Bulk mail is not sent to a list, it is sent to you specifically. Every reply, bounce, click and unsubscribe maps back to your address by design.</dd>
+      <dd>Bulk mail is not sent to a list, it is sent to you specifically. Every reply, bounce, click and unsubscribe maps back to your address by design — and the sending platform is named, so you can see which system holds a record about you.</dd>
+
+      <dt>Which list you are on</dt>
+      <dd>The list identifier is chosen internally and never meant to be read. Segment names like <code>reactivation-90d</code> say plainly how you have been filed.</dd>
+
+      <dt>The machine that wrote it</dt>
+      <dd>Client IP, mail program and timezone, where the sender left them. The same fields your own client writes into everything you send.</dd>
 
       <dt>Where the unsubscribe link actually goes</dt>
       <dd>Decoded from the link, not by visiting it — plus the structural tells that separate a real opt-out from a credential trap.</dd>

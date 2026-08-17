@@ -18,7 +18,15 @@ unsubscribe can be attributed back to you.
   separately.
 - **That your copy is unique.** Bulk mail is not sent to a list, it is sent to
   you specifically. VERP bounce addresses, `Feedback-ID`, and per-message
-  tracking ids all key back to your address.
+  tracking ids all key back to your address. Platform-specific identifiers are
+  named for what they are — a `X-MarketoID` is your lead record, a `X-HS-Cid`
+  is your entry in someone's CRM.
+- **Which list you are on.** `List-ID` carries an identifier the sender chose
+  and never expected anyone to read, which makes it the most candid line in the
+  header: segment names like `reactivation-90d` state how you have been filed.
+- **What the message says about the machine that wrote it.** Client IP, mail
+  program with version, and the timezone offset in `Date:` — the same fields
+  your own client writes into every message you send.
 - **Where the unsubscribe link actually goes.** ESP click-trackers pack the
   destination into base64 path segments; kuvertii unpacks them and reports the
   real target, plus the structural tells that separate an opt-out from a
@@ -30,6 +38,10 @@ unsubscribe can be attributed back to you.
 - **The route it took.** Read bottom-up, the first hop is the machine that
   generated the message — frequently an API injection from a datacentre rather
   than the brand on the envelope.
+- **The verdicts filters already reached.** Spam flags from every major
+  provider, including Microsoft 365's own vocabulary — `SCL`, `BCL`, `SFV` and
+  `CAT` are translated into words, and "filtering was skipped" is reported as
+  the finding it is rather than mistaken for a clean bill.
 
 Localised header labels are understood, so a paste out of a German, French,
 Spanish, Italian or Dutch mail client works as-is (`An:`, `Antwort an:`, …).
@@ -66,13 +78,39 @@ A reputation *API* would answer better, and was deliberately not used: querying
 one means telling a third party which link you are looking at, and that link
 contains your recipient id.
 
+## Related work
+
+Header analysis is a well-served field, but almost all of it is written from
+the sending side of the question. The established tools ask *is this sender
+authentic, and why was this message delayed or filtered* — a mail
+administrator's question. kuvertii asks what the same header says about the
+person who received it, which is why it decodes recipient identifiers rather
+than delivery diagnostics.
+
+- **[Microsoft MHA](https://github.com/microsoft/MHA)** (MIT) — the most mature
+  tool in the field: an Outlook add-in and web app that decodes the Microsoft
+  365 anti-spam headers and the per-hop delivery delays. For diagnosing why a
+  message was late or filtered inside Exchange, use this instead. Note the
+  trade-offs it accepts to reach the header: the add-in requires
+  `ReadWriteMailbox` permission on the mailbox, and it reports telemetry to
+  Application Insights.
+- **[emlAnalyzer](https://github.com/wahlflo/eml_analyzer)** (MIT) — a local
+  Python CLI for whole `.eml` files: MIME structure, attachments, embedded URLs
+  and remote-content trackers. Complementary rather than competing, since
+  kuvertii deliberately never looks past the header block.
+- **The hosted header analyzers** (MXToolbox, PowerDMARC and a dozen others) —
+  they cover authentication and routing well, and several now run client-side.
+  Deliberately unlinked here: a header is not anonymous, and sending one to a
+  form is a decision worth making on purpose rather than by following a link
+  from this page.
+
 ## Development
 
 No build step, no dependencies. Node is used only to run the tests and to bake
 the blocklist.
 
 ```sh
-node --test                          # 50 tests, stdlib only
+node --test                          # 76 tests, stdlib only
 node tools/build-blocklist.mjs       # writes data/ (gitignored, built in CI)
 python3 -m http.server 8000          # then open localhost:8000
 ```
