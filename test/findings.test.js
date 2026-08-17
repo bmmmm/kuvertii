@@ -232,6 +232,32 @@ test('the SPF explanation is reported, not just the verdict word', () => {
   assert.match(body, /does not designate/, 'the server\'s own wording is kept');
 });
 
+test('a VERP address with routing ids folds onto the known recipient', () => {
+  // Real schemes wedge ids between the prefix and the address:
+  // bounces+31859940-8aa2-alice=example.org@sender. Reported on its own it
+  // reads as a second recipient under a name nobody recognises as their own.
+  const headers = parseHeaders(
+    'To: alice@example.org\n'
+    + 'Received-SPF: pass (domain of bounces+31859940-8aa2-alice=example.org@em1.sender.example designates 1.2.3.4)\n',
+  );
+  const labels = analyse(headers).find((f) => f.id === 'recipients').items.map((i) => i.label);
+  assert.deepEqual(labels, ['alice@example.org'], 'one person, not two');
+
+  const entry = analyse(headers).find((f) => f.id === 'recipients').items[0];
+  assert.ok(entry.chips.some((c) => /VERP/.test(c)), 'still reported as a hiding place');
+});
+
+test('a genuinely different address is still reported separately', () => {
+  // The fold must key on the known recipient, not swallow anything similar.
+  const headers = parseHeaders(
+    'To: alice@example.org\n'
+    + 'X-Envelope-To: bounces-bob=example.org@em1.sender.example\n',
+  );
+  const labels = analyse(headers).find((f) => f.id === 'recipients').items.map((i) => i.label);
+  assert.ok(labels.includes('alice@example.org'));
+  assert.ok(labels.some((l) => /bob@example\.org/.test(l)), 'bob is not alice');
+});
+
 test('a clean message is not told it was filed as junk', () => {
   // The lede's closing clause is a claim about this specific message. The
   // bulk fixture carries X-Spam-Flag, so it earns the strong wording; a

@@ -34,6 +34,22 @@ function defangUrl(url) {
 }
 
 /**
+ * Is the match at `offset` part of an encoded payload rather than a hostname?
+ *
+ * Tracking blobs are long unbroken runs of base64, and a stretch like
+ * `u001.SdBcvi` inside one reads as label-dot-TLD without being a host.
+ * Bracketing it corrupts a value the reader may want to copy, so the
+ * surrounding token decides: a genuine hostname sits in a short word, while a
+ * payload is long and carries characters no hostname may contain.
+ */
+function insidePayload(text, offset) {
+  const start = text.lastIndexOf(' ', offset) + 1;
+  const end = text.indexOf(' ', offset);
+  const token = text.slice(start, end === -1 ? text.length : end);
+  return token.length > 40 && /[+/=]/.test(token);
+}
+
+/**
  * Defang every URL and hostname in a string, leaving prose and addresses alone.
  *
  * Bare hostnames are bracketed too, because a blocklist verdict names a domain
@@ -54,7 +70,9 @@ export function defang(text) {
       if (!part) return part;
       if (URL_START_RE.test(part)) return defangUrl(part);
       if (EMAIL_RE.test(part)) return part;
-      return part.replace(BARE_HOST_RE, (host) => host.replace(/\./g, '[.]'));
+      return part.replace(BARE_HOST_RE, (host, offset) => (
+        insidePayload(part, offset) ? host : host.replace(/\./g, '[.]')
+      ));
     })
     .join('');
 }

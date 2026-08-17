@@ -151,7 +151,7 @@ No build step, no dependencies. Node is used only to run the tests and to bake
 the blocklist.
 
 ```sh
-node --test                          # 107 tests, stdlib only
+node --test                          # 111 tests, stdlib only
 node tools/build-blocklist.mjs       # writes data/ (gitignored, built in CI)
 python3 -m http.server 8000          # then open localhost:8000
 ```

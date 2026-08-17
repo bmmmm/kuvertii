@@ -113,7 +113,8 @@ function recipientFinding(headers) {
     for (const [, local, domain] of header.value.matchAll(
       /([A-Za-z0-9._%+-]+)=([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})@/g,
     )) {
-      record(`${stripBouncePrefix(local)}@${domain}`, 'VERP bounce address');
+      const stripped = `${stripBouncePrefix(local)}@${domain}`;
+      record(foldOntoKnownRecipient(stripped, open.keys()), 'VERP bounce address');
     }
   }
 
@@ -172,6 +173,35 @@ function stripBouncePrefix(local) {
     out = out.replace(BOUNCE_PREFIX_RE, '');
   }
   return out || local;
+}
+
+/**
+ * Fold a VERP extraction onto the recipient it actually names.
+ *
+ * Real schemes put routing ids between the prefix and the address —
+ * `bounces+31859940-8aa2-alice=example.org@…` — and no prefix table can know
+ * where those ids end. Guessing risks mangling a local part that legitimately
+ * starts with digits, and leaving it alone reports the same person twice, once
+ * under a name they would not recognise as their own.
+ *
+ * So it is not guessed: if a recipient already found in the clear sits at the
+ * end of the local part, on a separator, this is that recipient.
+ */
+function foldOntoKnownRecipient(address, known) {
+  const at = address.lastIndexOf('@');
+  const local = address.slice(0, at);
+  const domain = address.slice(at + 1);
+
+  for (const candidate of known) {
+    const candidateAt = candidate.lastIndexOf('@');
+    const candidateLocal = candidate.slice(0, candidateAt);
+    if (candidate.slice(candidateAt + 1) !== domain) continue;
+    if (candidateLocal === local || !local.endsWith(candidateLocal)) continue;
+
+    const boundary = local[local.length - candidateLocal.length - 1];
+    if (/[-_.+]/.test(boundary ?? '')) return candidate;
+  }
+  return address;
 }
 
 // ------------------------------------------------------------------ tracking

@@ -38,6 +38,18 @@ test('an email address stays readable', () => {
   assert.doesNotMatch(out, /\[\.\]/);
 });
 
+test('a base64 payload is not mistaken for a hostname', () => {
+  // Inside a tracking blob, `u001.SdBcvi` reads as label-dot-TLD without being
+  // a host. Bracketing it corrupts a value the reader may want to copy.
+  const blob = 'u001.SdBcvi+Evd/bQef8eZF3BqAFEhjr7L5hwr+/dKejwhJSIGom3KureJpcrVe2sYRm';
+  assert.equal(defang(blob), blob, 'left byte-for-byte intact');
+});
+
+test('a real hostname beside a payload is still defanged', () => {
+  const out = defang(`sent via track.example.com id=${'A'.repeat(50)}+x/y`);
+  assert.match(out, /track\[\.\]example\[\.\]com/, 'the short token is a host');
+});
+
 test('prose is left alone', () => {
   const sentence = 'Encoding is not encryption. It only assumes nobody looks.';
   assert.equal(defang(sentence), sentence);
