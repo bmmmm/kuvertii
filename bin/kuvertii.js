@@ -171,6 +171,10 @@ async function interactive(renderer, { wipe }) {
 
   return new Promise((resolve) => {
     let busy = false;
+    // Whether the last empty clipboard is this tool's own doing. Without it the
+    // loop reports "the clipboard is empty" straight after emptying it, which
+    // reads as a fault rather than as the thing it just announced.
+    let emptiedByUs = false;
 
     stdin.on('data', async (key) => {
       if (key === 'q' || key === '\u0003' || key === '\u0004') { // q, Ctrl-C, Ctrl-D
@@ -189,10 +193,14 @@ async function interactive(renderer, { wipe }) {
         return;
       }
       if (!text?.trim()) {
-        stdout.write(`${renderer.paint('\x1b[33m', 'The clipboard is empty.')}\n`);
+        stdout.write(`${renderer.paint('\x1b[33m', emptiedByUs
+          ? 'The clipboard is still empty — this tool cleared it after the last read. Copy another header.'
+          : 'The clipboard is empty. Copy a header first.')}\n`);
         busy = false;
         return;
       }
+
+      emptiedByUs = false;
 
       // Leave raw mode while reporting so Ctrl-C works normally during output.
       stdin.setRawMode(false);
@@ -202,6 +210,7 @@ async function interactive(renderer, { wipe }) {
       // parse would take away the header the reader still needs.
       if (parsed && wipe) {
         const cleared = clearClipboard();
+        emptiedByUs = cleared;
         stdout.write(renderer.paint('\x1b[2m', cleared
           ? '\nClipboard emptied. Note that clipboard history tools and device sync keep their own copies.\n'
           : '\nCould not empty the clipboard.\n'));

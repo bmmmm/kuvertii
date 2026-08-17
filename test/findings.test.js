@@ -52,6 +52,28 @@ test('a header missing only its display fields is not called a fragment', () => 
   assert.doesNotMatch(finding.lede, /several dozen/, 'no nonsense about its size');
 });
 
+test('a bounce subdomain is not a person', () => {
+  // Nobody has a mailbox at bounce.linkedin.com. The envelope-sender scan
+  // catches this address when the header labels it; a partial paste does not
+  // label it, and it was surfacing as the reader.
+  const headers = parseHeaders(
+    'To: you@mailbox.example\n'
+    + 'X-Whatever: m-j7q2rwb8aca3ozj7n0uy4hluj7tlsdydo5j1tw9dvhagtr25o3b@bounce.linkedin.com\n',
+  );
+  const labels = analyse(headers).find((f) => f.id === 'recipients').items.map((i) => i.label);
+  assert.ok(!labels.some((l) => /bounce\.linkedin\.com/.test(l)));
+  assert.ok(labels.includes('you@mailbox.example'));
+});
+
+test('an ordinary subdomain is still a person', () => {
+  // The rule keys on return-path subdomains, not on subdomains in general.
+  const headers = parseHeaders(
+    'To: you@mailbox.example\nX-Envelope-To: someone@mail.university.example\n',
+  );
+  const labels = analyse(headers).find((f) => f.id === 'recipients').items.map((i) => i.label);
+  assert.ok(labels.includes('someone@mail.university.example'));
+});
+
 test('DMARC reporting addresses are not recipients', () => {
   // rua=/ruf= name whoever runs the sending domain. Reading them as recipients
   // puts a stranger's postmaster among the people this was addressed to.

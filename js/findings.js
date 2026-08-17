@@ -194,6 +194,7 @@ function recipientFinding(headers) {
     const record = (text, method) => {
       for (const address of findAddresses(text)) {
         if (senderAddresses.has(address)) continue;
+        if (BOUNCE_DOMAIN_RE.test(address.split('@')[1] ?? '')) continue;
         if (!hidden.has(address)) hidden.set(address, []);
         const entries = hidden.get(address);
         if (!entries.some((e) => e.field === header.name && e.method === method)) {
@@ -291,6 +292,17 @@ function recipientFinding(headers) {
     items,
   };
 }
+
+/**
+ * Subdomains that exist to receive bounces, not people.
+ *
+ * `bounce.linkedin.com`, `em9672.sender.example` and the like are the sending
+ * side's own return path. Nobody has a mailbox there, so an address on one is
+ * never the reader — which the envelope-sender scan already establishes when
+ * the header says `envelope-from=`. This catches the same address when it
+ * arrives without that label, as it does in a partial paste.
+ */
+const BOUNCE_DOMAIN_RE = /^(?:bounces?|bnc|v?erp|reply|replies|mailer|em\d+|mta|smtp)\./i;
 
 // Routing prefixes that VERP schemes put in front of the encoded recipient.
 // Hyphens are legal in a local part, so the boundary cannot be guessed — only
