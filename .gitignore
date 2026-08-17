@@ -1,0 +1,14 @@
+# Generated at build time by tools/build-blocklist.mjs and shipped straight
+# into the Pages artifact. Committing it would add ~530 KB of incompressible
+# binary to the history on every refresh.
+/data/
+
+# Local test headers. Ignored by design: a real header contains a real address,
+# and this directory is where it is convenient to keep one while developing.
+/samples/
+
+# Machine-local tool settings, not project configuration.
+/.claude/
+
+node_modules/
+.DS_Store

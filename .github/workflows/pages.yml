@@ -1,0 +1,62 @@
+name: pages
+
+on:
+  push:
+    branches: [main]
+  # The blocklist is a point-in-time snapshot, so the site is rebuilt daily to
+  # keep it from going stale. Phishing domains are often only days old.
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: node --test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      # Bakes the phishing feed into data/. Downloading it here rather than
+      # committing it keeps the repo free of a large binary that changes daily,
+      # and means every deploy ships a fresh snapshot.
+      - name: Build blocklist
+        run: node tools/build-blocklist.mjs
+
+      - name: Verify the blocklist was produced
+        run: |
+          test -s data/blocklist.bin || { echo "blocklist.bin missing or empty"; exit 1; }
+          node -e '
+            const m = require("./data/blocklist.json");
+            if (m.entries < 1000) { console.error("suspiciously small:", m.entries); process.exit(1); }
+            console.log(`blocklist: ${m.entries} entries, built ${m.builtAt}`);
+          '
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: .
+      - id: deployment
+        uses: actions/deploy-pages@v5

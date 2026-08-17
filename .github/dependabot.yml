@@ -1,0 +1,12 @@
+# github-actions only: package.json exists to declare `type: module` and the
+# test script, and has no dependencies for Dependabot to watch.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: chore(deps)
+    labels:
+      - dependencies

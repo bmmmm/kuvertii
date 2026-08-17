@@ -1,0 +1,13 @@
+{
+  "name": "kuvertii",
+  "version": "1.0.0",
+  "description": "Read what an email header says about you — entirely in the browser",
+  "license": "GPL-3.0-or-later",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/",
+    "build:blocklist": "node tools/build-blocklist.mjs",
+    "serve": "python3 -m http.server 8000"
+  }
+}

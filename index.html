@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+<title>kuvertii — read what an email header says about you</title>
+<meta name="description" content="Paste an email header and see what it reveals: who it was really addressed to, how that address was hidden, and where the unsubscribe link actually leads. Runs entirely in your browser.">
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>✉️</text></svg>">
+</head>
+<body>
+
+<main>
+  <header class="masthead">
+    <h1>kuvertii</h1>
+    <p class="tagline">An email header is a shipping label with the interesting parts written in a language nobody reads. Paste one in.</p>
+  </header>
+
+  <section class="input-area">
+    <label class="visually-hidden" for="header-input">Email header</label>
+    <textarea id="header-input" rows="10" spellcheck="false" autocomplete="off"
+              autocapitalize="off" autocorrect="off"
+              placeholder="Paste the full header here.&#10;&#10;Apple Mail: View → Message → All Headers&#10;Gmail: ⋮ → Show original&#10;Outlook: File → Properties → Internet headers&#10;Thunderbird: Ctrl+U"></textarea>
+    <div class="controls">
+      <button id="analyse" type="button" class="primary">Read it</button>
+      <button id="clear" type="button">Clear</button>
+      <span id="status" class="status" role="status" aria-live="polite"></span>
+    </div>
+  </section>
+
+  <section id="empty-state" class="empty">
+    <h2>What this finds</h2>
+    <dl>
+      <dt>Who it was really addressed to</dt>
+      <dd>Your address is usually in <code>To:</code> once and encoded three more times — in the unsubscribe token, the bounce address, and mailer fields stored backwards so they do not read as text.</dd>
+
+      <dt>That your copy is yours alone</dt>
+      <dd>Bulk mail is not sent to a list, it is sent to you specifically. Every reply, bounce, click and unsubscribe maps back to your address by design.</dd>
+
+      <dt>Where the unsubscribe link actually goes</dt>
+      <dd>Decoded from the link, not by visiting it — plus the structural tells that separate a real opt-out from a credential trap.</dd>
+
+      <dt>What the authentication results are worth</dt>
+      <dd>SPF, DKIM and DMARC ask whether a server may send for a domain. They never ask whether the mail is honest. Spam passes all three every day.</dd>
+
+      <dt>The route it took</dt>
+      <dd>Read from the bottom up, the first hop is the machine that generated the message — often an API call from a datacentre, not the brand on the envelope.</dd>
+    </dl>
+  </section>
+
+  <div id="results"></div>
+</main>
+
+<footer class="colophon">
+  <p><strong>Nothing you paste leaves this page.</strong> There is no server, no analytics and no storage — not even <code>localStorage</code>. The header lives in one variable and is gone when you close the tab. A Content-Security-Policy in the page source blocks every outbound request, so this is enforced by your browser rather than promised by us. Turn off your network and it still works.</p>
+  <p>The phishing blocklist is a snapshot of <a href="https://github.com/mitchellkrogza/Phishing.Database" rel="noopener noreferrer">Phishing.Database</a> (MIT), baked in at build time and served from this origin — the domain you check is never sent anywhere. A hit is a warning; a miss is not an all-clear.</p>
+  <p><a href="https://github.com/bmmmm/kuvertii" rel="noopener noreferrer">Source</a> · GPL-3.0-or-later</p>
+</footer>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

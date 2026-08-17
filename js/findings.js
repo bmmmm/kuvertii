@@ -1,0 +1,448 @@
+// Header → findings. This module is the product; everything else is plumbing.
+//
+// Each finding states what was found, what it means, and which header it came
+// from. The tone is dry rather than alarmed: the goal is for someone to
+// understand their own mail, not to be told what to feel about it.
+
+import { bestDecode, decodeSegments, findAddresses, prettifyNulls } from './decode.js';
+import { extractUrls, inspectUnsubscribeLink, registrableDomain } from './links.js';
+import { identifySender } from './senders.js';
+import { get, getAll } from './unfold.js';
+
+// Fields that legitimately name the recipient in the clear.
+const RECIPIENT_FIELDS = [
+  'to', 'cc', 'delivered-to', 'x-original-to', 'original-recipient',
+  'envelope-to', 'x-envelope-to', 'x-rcpt-to', 'apparently-to',
+];
+
+// Fields naming the sender — addresses here are not recipients.
+const SENDER_FIELDS = ['from', 'reply-to', 'sender', 'return-path', 'errors-to', 'x-sender'];
+
+export function analyse(headers) {
+  const findings = [];
+  const push = (f) => { if (f) findings.push(f); };
+
+  push(recipientFinding(headers));
+  push(trackingFinding(headers));
+  push(unsubscribeFinding(headers));
+  push(replyToFinding(headers));
+  push(authFinding(headers));
+  push(routeFinding(headers));
+  push(judgementFinding(headers));
+
+  return findings;
+}
+
+// ---------------------------------------------------------------- recipients
+
+function recipientFinding(headers) {
+  const open = new Map(); // address -> [source fields]
+  const hidden = new Map(); // address -> [{field, method}]
+
+  const senderAddresses = new Set();
+  for (const field of SENDER_FIELDS) {
+    for (const value of getAll(headers, field)) {
+      findAddresses(value).forEach((a) => senderAddresses.add(a));
+    }
+  }
+
+  for (const header of headers) {
+    const field = header.name.toLowerCase();
+    if (!RECIPIENT_FIELDS.includes(field)) continue;
+    for (const address of findAddresses(header.value)) {
+      if (!open.has(address)) open.set(address, []);
+      open.get(address).push(header.name);
+    }
+  }
+
+  // `Received: … for <addr>` records the envelope recipient at each hop — the
+  // address the delivering server was actually told to hand this to.
+  for (const value of getAll(headers, 'received')) {
+    const match = value.match(/\bfor\s+<([^>]+)>/i);
+    if (!match) continue;
+    for (const address of findAddresses(match[1])) {
+      if (!open.has(address)) open.set(address, []);
+      if (!open.get(address).includes('Received (envelope)')) {
+        open.get(address).push('Received (envelope)');
+      }
+    }
+  }
+
+  // Now the interesting part: addresses that were encoded rather than written.
+  for (const header of headers) {
+    if (SENDER_FIELDS.includes(header.name.toLowerCase())) continue;
+
+    const record = (text, method) => {
+      for (const address of findAddresses(text)) {
+        if (senderAddresses.has(address)) continue;
+        if (!hidden.has(address)) hidden.set(address, []);
+        const entries = hidden.get(address);
+        if (!entries.some((e) => e.field === header.name && e.method === method)) {
+          entries.push({ field: header.name, method });
+        }
+      }
+    };
+
+    for (const candidate of decodeSegments(header.value)) {
+      record(candidate.text, candidate.method);
+    }
+
+    // Tokens inside URLs — the unsubscribe link is the usual carrier.
+    for (const url of extractUrls(header.value)) {
+      for (const segment of url.split(/[/?&=#]/)) {
+        if (segment.length < 12) continue;
+        const decoded = bestDecode(segment, 0.5);
+        if (decoded) record(decoded.text, `${decoded.method} inside the URL`);
+      }
+    }
+
+    // VERP bounce addresses embed the recipient in their own local part, with
+    // the @ written as = — `bounce-alice=example.com@sender.example`. The
+    // pattern has to require a real domain after the =, otherwise every
+    // `key=value` pair in an Authentication-Results line reads as an address.
+    for (const [, local, domain] of header.value.matchAll(
+      /([A-Za-z0-9._%+-]+)=([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})@/g,
+    )) {
+      record(`${stripBouncePrefix(local)}@${domain}`, 'VERP bounce address');
+    }
+  }
+
+  if (!open.size && !hidden.size) return null;
+
+  const items = [];
+  for (const [address, fields] of open) {
+    const encodings = hidden.get(address) ?? [];
+    items.push({
+      label: address,
+      value: `in the clear: ${[...new Set(fields)].join(', ')}`,
+      note: encodings.length
+        ? `Also encoded ${encodings.length} more ${encodings.length === 1 ? 'time' : 'times'}: ${encodings
+            .map((e) => `${e.field} (${e.method})`)
+            .join('; ')}`
+        : null,
+      emphasis: encodings.length > 0,
+    });
+  }
+  for (const [address, entries] of hidden) {
+    if (open.has(address)) continue;
+    items.push({
+      label: address,
+      value: 'only found encoded — not in any visible field',
+      note: entries.map((e) => `${e.field} (${e.method})`).join('; '),
+      emphasis: true,
+    });
+  }
+
+  const encodedCount = [...hidden.values()].reduce((n, e) => n + e.length, 0);
+
+  return {
+    id: 'recipients',
+    title: 'Who this was actually addressed to',
+    tone: encodedCount ? 'alert' : 'info',
+    lede: encodedCount
+      ? `The recipient address appears ${encodedCount} more ${encodedCount === 1 ? 'time' : 'times'} than the visible To: field suggests, each one encoded. Encoding is not encryption — it is just a step that assumes nobody looks.`
+      : 'The addresses this message names as its destination.',
+    items,
+  };
+}
+
+// Routing prefixes that VERP schemes put in front of the encoded recipient.
+// Hyphens are legal in a local part, so the boundary cannot be guessed — only
+// a known prefix may be removed, and anything else is left intact.
+const BOUNCE_PREFIX_RE = /^(?:bounces?d?|return|returns|bnc|verp|prvs|msys|srs\d*|sb|fbl)[-_.]/i;
+
+function stripBouncePrefix(local) {
+  let out = local;
+  // Repeat: `bounce-return-alice` occurs in the wild.
+  for (let i = 0; i < 3 && BOUNCE_PREFIX_RE.test(out); i++) {
+    out = out.replace(BOUNCE_PREFIX_RE, '');
+  }
+  return out || local;
+}
+
+// ------------------------------------------------------------------ tracking
+
+function trackingFinding(headers) {
+  const items = [];
+
+  const returnPath = get(headers, 'return-path');
+  if (returnPath && /[-=][0-9a-f]{6,}/i.test(returnPath)) {
+    items.push({
+      label: 'Return-Path carries a per-recipient id',
+      value: returnPath,
+      note: 'Bounces come back to an address unique to you (VERP). It tells the sender which recipient bounced without asking the bounce message.',
+    });
+  }
+
+  for (const field of ['feedback-id', 'x-feedback-id']) {
+    const value = get(headers, field);
+    if (value) {
+      items.push({
+        label: 'Feedback-ID',
+        value,
+        note: 'Identifies sender, campaign and customer account to the mailbox provider. Used to attribute spam complaints.',
+      });
+    }
+  }
+
+  for (const header of headers) {
+    if (!/^x-mailer-info/i.test(header.name)) continue;
+    const decoded = decodeSegments(header.value).slice(0, 4);
+    if (!decoded.length) continue;
+    items.push({
+      label: header.name,
+      value: decoded.map((d) => `${prettifyNulls(d.text)}  [${d.method}]`).join('\n'),
+      note: 'Campaign metadata, stored backwards so it does not read as text at a glance.',
+      mono: true,
+    });
+  }
+
+  const messageId = get(headers, 'message-id') || get(headers, '(unlabelled)');
+  if (/^<?mid-[0-9a-f]{16,}/i.test(messageId)) {
+    items.push({
+      label: 'Message-ID is a generated tracking id',
+      value: messageId,
+      note: 'Not a random id — it is the send record\'s primary key on the sender\'s side.',
+    });
+  }
+
+  if (!items.length) return null;
+
+  return {
+    id: 'tracking',
+    title: 'This copy belongs to you alone',
+    tone: 'alert',
+    lede: 'Nothing here is shared with other recipients. Every id below is unique to your copy, which is how a reply, a bounce, a click or an unsubscribe gets attributed back to your address.',
+    items,
+  };
+}
+
+// --------------------------------------------------------------- unsubscribe
+
+function unsubscribeFinding(headers) {
+  const raw = getAll(headers, 'list-unsubscribe').join(' ');
+  if (!raw) return null;
+
+  const fromDomain = (findAddresses(get(headers, 'from'))[0] ?? '').split('@')[1] ?? '';
+  const hasOneClick = /one-click/i.test(get(headers, 'list-unsubscribe-post'));
+  const items = [];
+  const hosts = new Set();
+
+  for (const url of extractUrls(raw)) {
+    const report = inspectUnsubscribeLink(url, { fromDomain, hasOneClickHeader: hasOneClick });
+    (report.hostsToCheck ?? []).forEach((h) => hosts.add(h));
+    if (report.destination && report.destination !== url) {
+      items.push({
+        label: 'Real destination behind the redirect',
+        value: report.destination,
+        note: 'Decoded from the link itself. No request was made to find this out.',
+        mono: true,
+      });
+    }
+    for (const signal of report.signals) {
+      items.push({ label: signal.title, value: signal.detail, level: signal.level });
+    }
+  }
+
+  if (!items.length) return null;
+
+  return {
+    id: 'unsubscribe',
+    title: 'Where the unsubscribe link really goes',
+    tone: items.some((i) => i.level === 'bad') ? 'alert' : 'info',
+    lede: hasOneClick
+      ? 'This sender supports one-click unsubscribe (RFC 8058). Prefer your mail client\'s own unsubscribe button over the link in the message body — it skips the click tracker.'
+      : 'Checked by taking the link apart, not by visiting it. Nothing was sent anywhere.',
+    items,
+    // Resolved asynchronously against the offline blocklist once the page has it.
+    hostsToCheck: [...hosts],
+  };
+}
+
+// ------------------------------------------------------------------ reply-to
+
+function replyToFinding(headers) {
+  const from = get(headers, 'from');
+  const replyTo = get(headers, 'reply-to');
+  if (!replyTo) return null;
+
+  const fromAddress = findAddresses(from)[0];
+  const replyAddress = findAddresses(replyTo)[0];
+  if (!fromAddress || !replyAddress || fromAddress === replyAddress) return null;
+
+  const fromDomain = registrableDomain(fromAddress.split('@')[1] ?? '');
+  const replyDomain = registrableDomain(replyAddress.split('@')[1] ?? '');
+  if (fromDomain === replyDomain) return null;
+
+  return {
+    id: 'reply-to',
+    title: 'Your reply would go to a different organisation',
+    tone: 'alert',
+    lede: 'The visible sender and the address that receives replies are on unrelated domains. Sometimes that is a mailing platform doing its job — and sometimes it is the entire trick, because the reply is the part a filter never sees.',
+    items: [
+      { label: 'Appears to be from', value: `${fromAddress}  (${fromDomain})` },
+      { label: 'Replies actually reach', value: `${replyAddress}  (${replyDomain})`, emphasis: true },
+    ],
+  };
+}
+
+// -------------------------------------------------------------------- auth
+
+function authFinding(headers) {
+  const results = getAll(headers, 'authentication-results').join('\n');
+  const receivedSpf = get(headers, 'received-spf');
+  const dkimSignature = get(headers, 'dkim-signature');
+  if (!results && !receivedSpf && !dkimSignature) return null;
+
+  const items = [];
+  const verdicts = {};
+  for (const [, mechanism, verdict] of results.matchAll(/\b(spf|dkim|dmarc|arc|bimi)=(\w+)/gi)) {
+    const key = mechanism.toLowerCase();
+    if (!verdicts[key]) verdicts[key] = verdict.toLowerCase();
+  }
+
+  const explain = {
+    spf: 'The sending server was authorised by the domain to send on its behalf.',
+    dkim: 'The message carries an intact cryptographic signature from the domain.',
+    dmarc: 'The domain\'s published policy on failures was satisfied.',
+    arc: 'Chain of custody across forwarding hops.',
+    bimi: 'Brand logo verification.',
+  };
+
+  // Only SPF, DKIM and DMARC carry weight. BIMI and ARC are absent or failing
+  // on most legitimate mail, so colouring them red would cry wolf.
+  const DECISIVE = new Set(['spf', 'dkim', 'dmarc']);
+  for (const [mechanism, verdict] of Object.entries(verdicts)) {
+    items.push({
+      label: `${mechanism.toUpperCase()} = ${verdict}`,
+      value: explain[mechanism] ?? '',
+      level: DECISIVE.has(mechanism)
+        ? (verdict === 'pass' ? 'good' : verdict === 'fail' ? 'bad' : null)
+        : null,
+      note: DECISIVE.has(mechanism) ? null : 'Informational — commonly absent even on legitimate mail.',
+    });
+  }
+
+  const dmarcPolicy = get(headers, 'x-dmarc-policy') || results.match(/p=(\w+)/)?.[0];
+  if (dmarcPolicy) {
+    items.push({
+      label: 'Published DMARC policy',
+      value: dmarcPolicy,
+      note: 'What the domain owner asks receivers to do with messages that fail.',
+    });
+  }
+
+  const signingDomain = dkimSignature.match(/\bd=([^;\s]+)/)?.[1];
+  if (signingDomain) {
+    items.push({
+      label: 'Signed by domain',
+      value: signingDomain,
+      note: 'The signature proves this domain sent it — it says nothing about whether the domain is trustworthy.',
+    });
+  }
+
+  const timestamp = dkimSignature.match(/\bt=(\d{9,})/)?.[1];
+  if (timestamp) {
+    items.push({
+      label: 'Signed at',
+      value: new Date(Number(timestamp) * 1000).toISOString().replace('T', ' ').replace(/\..+/, ' UTC'),
+    });
+  }
+
+  const allPass = Object.values(verdicts).filter((v) => v === 'pass').length >= 2;
+
+  return {
+    id: 'auth',
+    title: allPass ? 'Every check passed. That proves less than it sounds.' : 'Authentication results',
+    tone: 'info',
+    lede: allPass
+      ? 'SPF, DKIM and DMARC answer one question: is this server allowed to send for this domain? They do not ask whether the mail is wanted, honest, or from someone you have heard of. A spammer who owns their domain passes all three — this one did, and the mailbox provider still filed it as junk.'
+      : 'What the receiving server could verify about the sender\'s identity.',
+    items,
+  };
+}
+
+// -------------------------------------------------------------------- route
+
+function routeFinding(headers) {
+  const received = getAll(headers, 'received');
+  if (!received.length) return null;
+
+  // Received headers are prepended, so the last one is the first hop.
+  const hops = received.map(parseReceived).reverse();
+
+  const items = hops.map((hop, index) => {
+    const platform = hop.from ? identifySender(registrableDomain(hop.from)) : null;
+    return {
+      label: `Hop ${index + 1}${index === 0 ? ' — origin' : ''}`,
+      value: [
+        hop.from ? `from ${hop.from}` : null,
+        hop.by ? `by ${hop.by}` : null,
+        hop.protocol ? `via ${hop.protocol}` : null,
+      ].filter(Boolean).join('  '),
+      note: [hop.date, platform ? `${platform.name} — a known bulk mail platform` : null]
+        .filter(Boolean)
+        .join('  ·  ') || null,
+      emphasis: index === 0,
+      mono: true,
+    };
+  });
+
+  const origin = hops[0];
+  const apiInjected = origin && /^https?$/i.test(origin.protocol ?? '');
+
+  return {
+    id: 'route',
+    title: 'The paper trail, read backwards',
+    tone: 'neutral',
+    lede: apiInjected
+      ? 'The first hop was handed over via HTTP, not SMTP — the message was injected through a sending platform\'s API. That first address is the machine that actually generated this mail, which is rarely the same as the brand on the envelope.'
+      : 'Each server that touched this message added a line on top, so the oldest entry is the true origin. Only the hops inside your own provider are hard to forge; everything before that is whatever the sender claimed.',
+    items,
+  };
+}
+
+function parseReceived(value) {
+  const [head, tail] = splitOnce(value, ';');
+  return {
+    from: head.match(/\bfrom\s+([^\s;()]+)/i)?.[1] ?? null,
+    by: head.match(/\bby\s+([^\s;()]+)/i)?.[1] ?? null,
+    protocol: head.match(/\bwith\s+([A-Za-z0-9]+)/i)?.[1] ?? null,
+    date: tail?.trim() || null,
+  };
+}
+
+function splitOnce(text, separator) {
+  const index = text.lastIndexOf(separator);
+  return index === -1 ? [text, null] : [text.slice(0, index), text.slice(index + 1)];
+}
+
+// --------------------------------------------------------------- judgements
+
+function judgementFinding(headers) {
+  const items = [];
+  const interesting = [
+    ['x-spam-flag', 'Spam flag'],
+    ['x-spam-status', 'Spam status'],
+    ['x-suspected-spam', 'Suspected spam'],
+    ['x-apple-action', 'Apple Mail action'],
+    ['x-apple-movetofolder', 'Filed into folder'],
+    ['x-spam-score', 'Spam score'],
+    ['x-icl-score', 'iCloud score'],
+  ];
+
+  for (const [field, label] of interesting) {
+    const value = get(headers, field);
+    if (value) items.push({ label, value });
+  }
+
+  if (!items.length) return null;
+
+  return {
+    id: 'judgement',
+    title: 'Someone already made up their mind',
+    tone: 'neutral',
+    lede: 'Filters along the way left their verdicts in the header. These are opinions, not facts — but they are the opinions that decided which folder this landed in.',
+    items,
+  };
+}
