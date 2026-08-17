@@ -98,6 +98,25 @@ test('the unsubscribe link is resolved and judged', () => {
   assert.ok(finding.hostsToCheck.length > 0, 'hands hostnames to the blocklist stage');
 });
 
+test('the list identifier is extracted from its description', () => {
+  const finding = byId('list');
+  assert.ok(finding, 'list finding produced');
+
+  const id = finding.items.find((i) => i.label === 'List identifier');
+  assert.equal(id.value, 'reaktivierung-90d.mail.example.email');
+
+  // The internal segment name is the candid part — it is why this card exists.
+  assert.match(id.value, /reaktivierung/);
+  assert.match(text(finding), /Beispiel Wochenpost/, 'the sender\'s own description is kept');
+  assert.match(text(finding), /archiv/i, 'the public archive is reported');
+});
+
+test('list contact addresses are not reported as recipients', () => {
+  // List-Owner names the list, not a person this was addressed to.
+  const labels = byId('recipients').items.map((i) => i.label);
+  assert.ok(!labels.includes('redaktion@mail.example.email'));
+});
+
 test('platform recipient ids are named with the platform that keys them', () => {
   const body = text(byId('tracking'));
   assert.match(body, /SendGrid/, 'X-SG-EID attributed');

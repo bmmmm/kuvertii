@@ -15,8 +15,15 @@ const RECIPIENT_FIELDS = [
   'envelope-to', 'x-envelope-to', 'x-rcpt-to', 'apparently-to',
 ];
 
-// Fields naming the sender — addresses here are not recipients.
-const SENDER_FIELDS = ['from', 'reply-to', 'sender', 'return-path', 'errors-to', 'x-sender'];
+// Fields naming the sender — addresses here are not recipients. The list-*
+// administrative fields belong here too: they carry the list's own contact
+// addresses, which would otherwise be reported as people this was sent to.
+// `List-Unsubscribe` is deliberately absent, because its token is where the
+// recipient's own address most often hides.
+const SENDER_FIELDS = [
+  'from', 'reply-to', 'sender', 'return-path', 'errors-to', 'x-sender',
+  'list-owner', 'list-post', 'list-help', 'list-subscribe',
+];
 
 export function analyse(headers) {
   const findings = [];
@@ -24,6 +31,7 @@ export function analyse(headers) {
 
   push(recipientFinding(headers));
   push(trackingFinding(headers));
+  push(listFinding(headers));
   push(unsubscribeFinding(headers));
   push(replyToFinding(headers));
   push(authFinding(headers));
@@ -264,6 +272,74 @@ function trackingFinding(headers) {
     title: 'This copy belongs to you alone',
     tone: 'alert',
     lede: 'Nothing here is shared with other recipients. Every id below is unique to your copy, which is how a reply, a bounce, a click or an unsubscribe gets attributed back to your address.',
+    items,
+  };
+}
+
+// ---------------------------------------------------------------------- list
+
+// RFC 2919 puts the identifier in angle brackets, with an optional human
+// description in front of it: `Weekly deals <deals.list.example.com>`.
+const LIST_ID_RE = /^\s*(.*?)\s*<([^>]+)>\s*$/;
+
+const LIST_CONTEXT = [
+  ['list-owner', 'Run by', 'The address that answers for this list — usually a person rather than a no-reply.'],
+  ['list-post', 'Posting address', 'Where messages to the list itself go. Its presence means this is a discussion list, not a one-way broadcast.'],
+  ['list-archive', 'Public archive', 'Messages to this list are kept somewhere readable. Anything you post to it is published.'],
+  ['list-help', 'Help address', null],
+  ['list-subscribe', 'Subscribe address', null],
+];
+
+/**
+ * What the list headers say about the subscription behind this message.
+ *
+ * `List-Unsubscribe` gets its own card because leaving is the action people
+ * want. This one answers the prior question: which list is this, and what did
+ * the sender name it? The identifier is chosen internally and never meant to
+ * be read, so it is often the most candid line in the whole header — segment
+ * names like `reactivation` or `inactive-90d` say plainly how you are filed.
+ */
+function listFinding(headers) {
+  const rawId = get(headers, 'list-id');
+  const items = [];
+
+  if (rawId) {
+    const match = rawId.match(LIST_ID_RE);
+    const identifier = match?.[2] ?? rawId;
+    const description = match?.[1]?.replace(/^"|"$/g, '').trim();
+
+    items.push({
+      label: 'List identifier',
+      value: identifier,
+      note: 'Assigned by the sender and stable across mailings, so it is the same string every message from this list carries.',
+      mono: true,
+      emphasis: true,
+    });
+
+    if (description) {
+      items.push({
+        label: 'The sender calls it',
+        value: description,
+        note: 'The description they chose to put in the header, which need not match the name on the sign-up form.',
+      });
+    }
+  }
+
+  for (const [field, label, note] of LIST_CONTEXT) {
+    const value = get(headers, field);
+    // These arrive as `<mailto:owner@host>` or `<https://…>`. The brackets and
+    // the scheme are RFC packaging, not information.
+    const bare = value.replace(/^<|>$/g, '').replace(/^mailto:/i, '').trim();
+    if (bare) items.push({ label, value: clip(bare), note });
+  }
+
+  if (!items.length) return null;
+
+  return {
+    id: 'list',
+    title: 'The list you are on',
+    tone: 'info',
+    lede: 'These headers describe the subscription rather than the message. They are set once per list, which means every copy that reaches you names the same record on the sender\'s side.',
     items,
   };
 }

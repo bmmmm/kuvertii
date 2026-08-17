@@ -33,6 +33,9 @@ X-Mailer-Info-Extra: ddad3f5708:${MAILER_SEGMENT}
  ${CAMPAIGN_SEGMENT}
 List-Unsubscribe: <https://mail.example.email/unsub/${UNSUB_TOKEN}>
 List-Unsubscribe-Post: List-Unsubscribe=One-Click
+List-Id: Beispiel Wochenpost <reaktivierung-90d.mail.example.email>
+List-Owner: <mailto:redaktion@mail.example.email>
+List-Archive: <https://news.example.org/archiv>
 X-SG-EID: sIS7wRUZL8h9HxBAOmSkPHhr
 X-MarketoID: 903-ABC-123:45678:0
 X-Campaign-Id: sommer-2026
