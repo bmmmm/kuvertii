@@ -98,6 +98,34 @@ test('the unsubscribe link is resolved and judged', () => {
   assert.ok(finding.hostsToCheck.length > 0, 'hands hostnames to the blocklist stage');
 });
 
+test('platform recipient ids are named with the platform that keys them', () => {
+  const body = text(byId('tracking'));
+  assert.match(body, /SendGrid/, 'X-SG-EID attributed');
+  assert.match(body, /Marketo/, 'X-MarketoID attributed');
+  assert.match(body, /lead id/i, 'and explained in terms of the record it points at');
+});
+
+test('an unattributed id header is reported without inventing a platform', () => {
+  const item = byId('tracking').items.find((i) => /X-Campaign-Id/i.test(i.label));
+  assert.ok(item, 'the generic pattern still fires');
+  assert.deepEqual(item.chips, [], 'but claims no platform');
+});
+
+test('one payload repeated across mailer fields is reported once', () => {
+  // X-Mailer-Info and -Extra carry the same decoded content in the fixture.
+  const items = byId('tracking').items.filter((i) => /X-Mailer-Info/.test(i.label));
+  assert.equal(items.length, 1, 'grouped rather than listed twice');
+  assert.match(items[0].label, /X-Mailer-Info, X-Mailer-Info-Extra/);
+});
+
+test('an oversized tracking payload is clipped rather than dumped', () => {
+  const headers = parseHeaders(`X-MSFBL: ${'A'.repeat(4000)}\n`);
+  const item = analyse(headers).find((f) => f.id === 'tracking').items[0];
+  assert.ok(item.value.length < 200, 'clipped for display');
+  assert.match(item.value, /\.\.\./);
+  assert.match(item.note, /SparkPost|feedback/i);
+});
+
 test('an empty input produces no findings rather than throwing', () => {
   assert.deepEqual(analyse(parseHeaders('')), []);
 });

@@ -6,7 +6,7 @@
 
 import { bestDecode, decodeSegments, findAddresses, prettifyNulls } from './decode.js';
 import { extractUrls, inspectUnsubscribeLink, registrableDomain } from './links.js';
-import { identifySender } from './senders.js';
+import { identifyPlatformHeader, identifySender } from './senders.js';
 import { get, getAll } from './unfold.js';
 
 // Fields that legitimately name the recipient in the clear.
@@ -31,6 +31,20 @@ export function analyse(headers) {
   push(judgementFinding(headers));
 
   return findings;
+}
+
+/**
+ * Shorten an opaque value for display.
+ *
+ * Tracking payloads run to kilobytes of base64. The head and tail are what a
+ * reader can act on — enough to recognise the value again, and to see that it
+ * is an id rather than a sentence — so the middle is what gets dropped.
+ */
+function clip(value, max = 160) {
+  const text = String(value ?? '').trim();
+  if (text.length <= max) return text;
+  const keep = Math.floor((max - 3) / 2);
+  return `${text.slice(0, keep)}...${text.slice(-keep)}`;
 }
 
 // ---------------------------------------------------------------- recipients
@@ -189,13 +203,27 @@ function trackingFinding(headers) {
     }
   }
 
+  // Mailer fields habitually repeat one payload across several headers
+  // (`X-Mailer-Info`, then `-Extra`, sometimes more). Listing each separately
+  // fills the card with the same decoded string; grouping by content states it
+  // once and names every field it turned up in.
+  const mailerGroups = new Map();
   for (const header of headers) {
     if (!/^x-mailer-info/i.test(header.name)) continue;
     const decoded = decodeSegments(header.value).slice(0, 4);
     if (!decoded.length) continue;
+
+    const body = decoded.map((d) => prettifyNulls(d.text)).join('\n');
+    if (!mailerGroups.has(body)) mailerGroups.set(body, { fields: [], methods: new Set() });
+    const group = mailerGroups.get(body);
+    group.fields.push(header.name);
+    decoded.forEach((d) => group.methods.add(d.method));
+  }
+  for (const [body, group] of mailerGroups) {
     items.push({
-      label: header.name,
-      value: decoded.map((d) => `${prettifyNulls(d.text)}  [${d.method}]`).join('\n'),
+      label: group.fields.join(', '),
+      value: body,
+      chips: [...group.methods],
       note: 'Campaign metadata, stored backwards so it does not read as text at a glance.',
       mono: true,
     });
@@ -207,6 +235,25 @@ function trackingFinding(headers) {
       label: 'Message-ID is a generated tracking id',
       value: messageId,
       note: 'Not a random id — it is the send record\'s primary key on the sender\'s side.',
+    });
+  }
+
+  // Platform-specific recipient keys. Every suite stamps its own; naming the
+  // platform is what makes the id legible, because it says which system holds
+  // a record about this address and what that record is called there.
+  const seen = new Set(items.map((i) => i.label.toLowerCase()));
+  for (const header of headers) {
+    const identified = identifyPlatformHeader(header.name);
+    if (!identified || !header.value.trim()) continue;
+    if (seen.has(header.name.toLowerCase())) continue;
+    seen.add(header.name.toLowerCase());
+
+    items.push({
+      label: header.name,
+      value: clip(header.value),
+      chips: identified.platform ? [identified.platform] : [],
+      note: identified.meaning,
+      mono: true,
     });
   }
 

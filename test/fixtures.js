@@ -33,6 +33,9 @@ X-Mailer-Info-Extra: ddad3f5708:${MAILER_SEGMENT}
  ${CAMPAIGN_SEGMENT}
 List-Unsubscribe: <https://mail.example.email/unsub/${UNSUB_TOKEN}>
 List-Unsubscribe-Post: List-Unsubscribe=One-Click
+X-SG-EID: sIS7wRUZL8h9HxBAOmSkPHhr
+X-MarketoID: 903-ABC-123:45678:0
+X-Campaign-Id: sommer-2026
 Feedback-Id: FB0D2036:151900::GASV
 Authentication-Results: dmarc.example.com; dmarc=pass header.from=mail.example.email
 Authentication-Results: dkim.example.com; dkim=pass header.d=mail.example.email
