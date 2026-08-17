@@ -202,6 +202,36 @@ test('skipped filtering is flagged rather than read as a pass', () => {
   assert.match(text({ items }), /before any check ran/, 'SFV:SKN explained');
 });
 
+test('a failing check is never described in the words of a passing one', () => {
+  const finding = msById('auth');
+  assert.ok(finding);
+  assert.equal(finding.tone, 'alert', 'failures raise the card');
+  assert.match(finding.title, /did not check out/);
+
+  const spf = finding.items.find((i) => i.label === 'SPF = fail');
+  assert.match(spf.value, /not authorised/, 'says what actually happened');
+  assert.equal(spf.level, 'bad');
+
+  const dkim = finding.items.find((i) => i.label === 'DKIM = none');
+  assert.match(dkim.value, /no signature/i);
+
+  // The regression this guards: one description per mechanism reads as the
+  // pass case and inverts the meaning on a forged message.
+  assert.doesNotMatch(spf.value, /was authorised by the domain to send/);
+  assert.doesNotMatch(dkim.value, /carries an intact/);
+});
+
+test('innocent explanations for a failure are given alongside it', () => {
+  // Forwarding breaks SPF routinely; the card must not read as proof of fraud.
+  assert.match(msById('auth').lede, /forwarded|innocent/i);
+});
+
+test('the SPF explanation is reported, not just the verdict word', () => {
+  const body = text(msById('auth'));
+  assert.match(body, /Received-SPF: Fail/);
+  assert.match(body, /does not designate/, 'the server\'s own wording is kept');
+});
+
 test('an empty input produces no findings rather than throwing', () => {
   assert.deepEqual(analyse(parseHeaders('')), []);
 });

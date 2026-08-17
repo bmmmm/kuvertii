@@ -514,21 +514,41 @@ function authFinding(headers) {
     if (!verdicts[key]) verdicts[key] = verdict.toLowerCase();
   }
 
+  // Each verdict needs its own sentence. A single description per mechanism
+  // reads as the pass case, which on a failing message states the opposite of
+  // what happened — the one error this card must never make.
   const explain = {
-    spf: 'The sending server was authorised by the domain to send on its behalf.',
-    dkim: 'The message carries an intact cryptographic signature from the domain.',
-    dmarc: 'The domain\'s published policy on failures was satisfied.',
-    arc: 'Chain of custody across forwarding hops.',
-    bimi: 'Brand logo verification.',
+    spf: {
+      pass: 'The sending server was authorised by the domain to send on its behalf.',
+      fail: 'The sending server was not authorised by the domain it claims to send for.',
+      softfail: 'The domain lists this server as probably not authorised, but stops short of saying so outright.',
+      none: 'The domain publishes no SPF record, so there was nothing to check against.',
+      other: 'No verdict could be reached — usually a lookup that failed rather than a judgement.',
+    },
+    dkim: {
+      pass: 'The message carries an intact cryptographic signature from the domain.',
+      fail: 'A signature was present but did not verify. The message was altered in transit, or it was never signed by the domain it names.',
+      none: 'The message carries no signature at all, so nothing about it can be verified cryptographically.',
+      other: 'The signature could not be evaluated.',
+    },
+    dmarc: {
+      pass: 'The domain\'s published policy on failures was satisfied.',
+      fail: 'The message failed the domain\'s own policy — the domain owner asks receivers not to trust mail like this.',
+      none: 'The domain publishes no DMARC policy, so it has never said what should happen to forgeries.',
+      other: 'The policy could not be evaluated.',
+    },
+    arc: { other: 'Chain of custody across forwarding hops.' },
+    bimi: { other: 'Brand logo verification.' },
   };
 
   // Only SPF, DKIM and DMARC carry weight. BIMI and ARC are absent or failing
   // on most legitimate mail, so colouring them red would cry wolf.
   const DECISIVE = new Set(['spf', 'dkim', 'dmarc']);
   for (const [mechanism, verdict] of Object.entries(verdicts)) {
+    const wording = explain[mechanism] ?? {};
     items.push({
       label: `${mechanism.toUpperCase()} = ${verdict}`,
-      value: explain[mechanism] ?? '',
+      value: wording[verdict] ?? wording.other ?? '',
       level: DECISIVE.has(mechanism)
         ? (verdict === 'pass' ? 'good' : verdict === 'fail' ? 'bad' : null)
         : null,
@@ -543,6 +563,21 @@ function authFinding(headers) {
       value: dmarcPolicy,
       note: 'What the domain owner asks receivers to do with messages that fail.',
     });
+  }
+
+  // Received-SPF usually carries a sentence explaining the verdict, which says
+  // more than `spf=fail` does — it names the domain and the server that was not
+  // authorised for it.
+  if (receivedSpf) {
+    const [outcome, ...rest] = receivedSpf.split(/\s+/);
+    const explanation = rest.join(' ').replace(/^\((.*)\)$/, '$1').trim();
+    if (explanation) {
+      items.push({
+        label: `Received-SPF: ${outcome.replace(/[^A-Za-z]/g, '')}`,
+        value: explanation,
+        note: 'The receiving server\'s own words, recorded as it made the decision.',
+      });
+    }
   }
 
   const signingDomain = dkimSignature.match(/\bd=([^;\s]+)/)?.[1];
@@ -563,14 +598,23 @@ function authFinding(headers) {
   }
 
   const allPass = Object.values(verdicts).filter((v) => v === 'pass').length >= 2;
+  const failed = Object.entries(verdicts)
+    .filter(([mechanism, verdict]) => DECISIVE.has(mechanism) && verdict === 'fail')
+    .map(([mechanism]) => mechanism.toUpperCase());
 
   return {
     id: 'auth',
-    title: allPass ? 'Every check passed. That proves less than it sounds.' : 'Authentication results',
-    tone: 'info',
+    title: allPass
+      ? 'Every check passed. That proves less than it sounds.'
+      : failed.length
+        ? 'The sender\'s identity did not check out'
+        : 'Authentication results',
+    tone: failed.length ? 'alert' : 'info',
     lede: allPass
       ? 'SPF, DKIM and DMARC answer one question: is this server allowed to send for this domain? They do not ask whether the mail is wanted, honest, or from someone you have heard of. A spammer who owns their domain passes all three — this one did, and the mailbox provider still filed it as junk.'
-      : 'What the receiving server could verify about the sender\'s identity.',
+      : failed.length
+        ? `${failed.join(' and ')} failed. These checks break for innocent reasons too — a forwarded message loses SPF, a mailing list rewrites the body and voids the signature. But they also fail for the obvious reason, and nothing in the header distinguishes the two. Treat the name in the From field as unverified.`
+        : 'What the receiving server could verify about the sender\'s identity.',
     items,
   };
 }
