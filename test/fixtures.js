@@ -56,3 +56,21 @@ Received: from 203.0.113.116 by 198.51.100.107 with https; 17 Aug 2026 17:48:35 
 MIME-Version: 1.0
 <mid-0a8b4b4903f2c04d71238613c8e4c12d@mail.example.email>
 `;
+
+// A message that reached a Microsoft 365 mailbox and was judged on the way in.
+// Modelled on credential phishing: the envelope is unauthorised, the filter
+// caught it, and the verdict fields say so in Microsoft's own vocabulary.
+// The client IP and the timezone offset are the fields that describe whoever
+// composed it — the same ones a reply would carry back about the reader.
+export const MICROSOFT_HEADER = `From: "IT Support" <helpdesk@contoso-secure.example>
+To: ${RECIPIENT}
+Subject: Action required: verify your mailbox
+Date: Mon, 17 Aug 2026 09:12:04 +0300
+User-Agent: Microsoft Outlook 16.0.17328
+X-Originating-IP: [198.51.100.77]
+Received-SPF: Fail (protection.outlook.com: domain of contoso-secure.example does not designate 198.51.100.77 as permitted sender)
+Authentication-Results: protection.outlook.com; spf=fail; dkim=none; dmarc=fail
+X-Forefront-Antispam-Report: CIP:198.51.100.77;CTRY:RU;LANG:en;SCL:9;SRV:;IPV:NLI;SFV:SPM;H:mail.contoso-secure.example;PTR:unknown;CAT:PHSH;SFTY:9.19
+X-Microsoft-Antispam: BCL:0;
+X-MS-Exchange-Organization-SCL: 9
+`;

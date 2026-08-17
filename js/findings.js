@@ -34,6 +34,7 @@ export function analyse(headers) {
   push(listFinding(headers));
   push(unsubscribeFinding(headers));
   push(replyToFinding(headers));
+  push(originFinding(headers));
   push(authFinding(headers));
   push(routeFinding(headers));
   push(judgementFinding(headers));
@@ -410,6 +411,90 @@ function replyToFinding(headers) {
       { label: 'Appears to be from', value: `${fromAddress}  (${fromDomain})` },
       { label: 'Replies actually reach', value: `${replyAddress}  (${replyDomain})`, emphasis: true },
     ],
+  };
+}
+
+// ------------------------------------------------------------------ origin
+
+// Client IP as various providers record it. Webmail interfaces are the usual
+// source: the browser connects over HTTP, and the gateway writes the address
+// it saw into the outgoing message.
+// Spelled out rather than derived from the field name, because deriving turns
+// `x-originating-ip` into "Originating ip".
+const CLIENT_IP_FIELDS = [
+  ['x-originating-ip', 'Originating IP'],
+  ['x-original-ip', 'Original IP'],
+  ['x-sender-ip', 'Sender IP'],
+  ['x-source-ip', 'Source IP'],
+  ['x-remote-ip', 'Remote IP'],
+  ['x-client-ip', 'Client IP'],
+  ['x-originating-email', 'Originating address'],
+];
+
+const PRIVATE_IP_RE = /^(?:10\.|127\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|::1$|f[cd])/i;
+
+/**
+ * The machine and program that composed the message.
+ *
+ * On mail you received this describes the sender. The reason it belongs in a
+ * tool about *your* header is the symmetry: these are the same fields your own
+ * client writes into everything you send, so the card doubles as a look at
+ * what you hand over with every reply. Said plainly, without pretending the
+ * address belongs to the reader when it does not.
+ */
+function originFinding(headers) {
+  const items = [];
+
+  for (const [field, label] of CLIENT_IP_FIELDS) {
+    for (const value of getAll(headers, field)) {
+      // Providers bracket the address: `X-Originating-IP: [203.0.113.5]`.
+      const address = value.replace(/^\[|\]$/g, '').trim();
+      if (!address) continue;
+
+      const isPrivate = PRIVATE_IP_RE.test(address);
+      items.push({
+        label,
+        value: address,
+        note: isPrivate
+          ? 'A private address, so it names a machine inside the sender\'s network rather than one reachable from outside.'
+          : 'The address of the device that submitted the message, recorded by the provider that accepted it. It survives into every copy — nothing downstream removes it.',
+        level: isPrivate ? null : 'caution',
+        emphasis: !isPrivate,
+      });
+    }
+  }
+
+  const mailer = get(headers, 'user-agent') || get(headers, 'x-mailer');
+  if (mailer) {
+    const versioned = /\d+\.\d+/.test(mailer);
+    items.push({
+      label: 'Composed with',
+      value: clip(mailer),
+      note: versioned
+        ? 'Named down to the version. On personal mail this pins the sender to a specific program and release — one of the few header fields chosen by a person rather than a server.'
+        : 'The program that generated the message.',
+    });
+  }
+
+  // The offset in Date: is the composing machine's clock, not the server's.
+  // UTC is skipped: it means an automated sender and says nothing about anyone.
+  const offset = get(headers, 'date').match(/([+-]\d{4})\s*$/)?.[1];
+  if (offset && offset !== '+0000' && offset !== '-0000') {
+    items.push({
+      label: 'Written in timezone',
+      value: `UTC${offset.replace(/^([+-])(\d{2})(\d{2})$/, '$1$2:$3')}`,
+      note: 'Taken from the Date field, which carries the composing machine\'s local offset. It narrows down a part of the world, and on personal mail it narrows down a working day.',
+    });
+  }
+
+  if (!items.length) return null;
+
+  return {
+    id: 'origin',
+    title: 'The machine that wrote this',
+    tone: items.some((i) => i.level === 'caution') ? 'alert' : 'neutral',
+    lede: 'Fields the sending side filled in about itself. On a message you received they describe the sender — and on every message you send, the same fields describe you.',
+    items,
   };
 }
 

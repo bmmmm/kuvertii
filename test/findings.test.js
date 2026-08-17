@@ -3,10 +3,13 @@ import { test } from 'node:test';
 
 import { analyse } from '../js/findings.js';
 import { parseHeaders } from '../js/unfold.js';
-import { BULK_HEADER, RECIPIENT } from './fixtures.js';
+import { BULK_HEADER, MICROSOFT_HEADER, RECIPIENT } from './fixtures.js';
 
 const report = () => analyse(parseHeaders(BULK_HEADER));
 const byId = (id) => report().find((f) => f.id === id);
+const msReport = () => analyse(parseHeaders(MICROSOFT_HEADER));
+const msById = (id) => msReport().find((f) => f.id === id);
+
 // Everything a reader sees on a row: label, value, chips and note alike.
 const text = (finding) =>
   finding.items
@@ -143,6 +146,33 @@ test('an oversized tracking payload is clipped rather than dumped', () => {
   assert.ok(item.value.length < 200, 'clipped for display');
   assert.match(item.value, /\.\.\./);
   assert.match(item.note, /SparkPost|feedback/i);
+});
+
+test('the composing machine is described without claiming it is the reader', () => {
+  const finding = msById('origin');
+  assert.ok(finding);
+
+  const body = text(finding);
+  assert.match(body, /198\.51\.100\.77/, 'client IP surfaced');
+  assert.match(body, /Outlook 16/, 'mail program surfaced');
+  assert.match(body, /UTC\+03:00/, 'timezone read from the Date offset');
+
+  // The honest framing: on received mail this is the sender, not the reader.
+  assert.match(finding.lede, /you send/i);
+});
+
+test('a UTC offset is not reported as a timezone finding', () => {
+  // +0000 means an automated sender and says nothing about a person.
+  const headers = parseHeaders('Date: Mon, 17 Aug 2026 17:48:42 +0000\nX-Mailer: Bulk\n');
+  const finding = analyse(headers).find((f) => f.id === 'origin');
+  assert.ok(!text(finding).includes('timezone'));
+});
+
+test('a private client IP is not treated as an exposed address', () => {
+  const headers = parseHeaders('X-Originating-IP: [192.168.1.14]\n');
+  const item = analyse(headers).find((f) => f.id === 'origin').items[0];
+  assert.equal(item.level, null);
+  assert.match(item.note, /private/i);
 });
 
 test('an empty input produces no findings rather than throwing', () => {
