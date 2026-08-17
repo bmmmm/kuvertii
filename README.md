@@ -39,7 +39,10 @@ unsubscribe can be attributed back to you.
   free to be rewritten by anyone.
 - **The route it took.** Read bottom-up, the first hop is the machine that
   generated the message — frequently an API injection from a datacentre rather
-  than the brand on the envelope.
+  than the brand on the envelope. Where that hop names itself with an encoded
+  identifier rather than a hostname, it is decoded: sending platforms label the
+  connection with the account they are billing, so the sender's customer number
+  travels in the routing.
 - **The verdicts filters already reached.** Spam flags from every major
   provider, including Microsoft 365's own vocabulary — `SCL`, `BCL`, `SFV` and
   `CAT` are translated into words, and "filtering was skipped" is reported as
@@ -151,7 +154,7 @@ No build step, no dependencies. Node is used only to run the tests and to bake
 the blocklist.
 
 ```sh
-node --test                          # 111 tests, stdlib only
+node --test                          # 113 tests, stdlib only
 node tools/build-blocklist.mjs       # writes data/ (gitignored, built in CI)
 python3 -m http.server 8000          # then open localhost:8000
 ```

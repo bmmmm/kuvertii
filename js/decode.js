@@ -47,6 +47,33 @@ function fromBase64(input) {
 }
 
 /**
+ * Decode a short token that turns out to be an encoded identifier.
+ *
+ * Separate from bestDecode because the readability heuristic cannot help here:
+ * an account number decodes to `31859940`, which scores 0.40 as prose — the
+ * same as the random bytes a real hostname yields when forced through base64.
+ * What separates them is not readability but character class. An identifier
+ * decodes to printable ASCII; a false positive decodes to control bytes and
+ * replacement characters.
+ *
+ * Returns the decoded text, or null when the input is not such a token.
+ */
+export function decodeIdentifier(value, { min = 6, max = 64 } = {}) {
+  const token = String(value ?? '').trim();
+  if (token.length < min || token.length > max) return null;
+  // A dot means a hostname, which is what this is meant to tell apart from one.
+  if (/[.@]/.test(token) || !/^[A-Za-z0-9+/\-_]+=*$/.test(token)) return null;
+
+  const decoded = fromBase64(token);
+  if (!decoded || decoded.length < 3) return null;
+  if (!/^[\x20-\x7E]+$/.test(decoded)) return null;
+  // Decoding must actually shorten it; otherwise this is just a rename.
+  if (decoded.length >= token.length) return null;
+
+  return decoded;
+}
+
+/**
  * How much does this look like information rather than noise?
  *
  * Returns 0..1. Crypto blobs (X-Mantsh, X-Jnj) decode to high-entropy bytes and

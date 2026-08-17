@@ -4,7 +4,7 @@
 // from. The tone is dry rather than alarmed: the goal is for someone to
 // understand their own mail, not to be told what to feel about it.
 
-import { bestDecode, clip, decodeSegments, findAddresses, prettifyNulls } from './decode.js';
+import { bestDecode, clip, decodeIdentifier, decodeSegments, findAddresses, prettifyNulls } from './decode.js';
 import { extractUrls, inspectUnsubscribeLink, registrableDomain } from './links.js';
 import { microsoftVerdicts } from './microsoft.js';
 import { identifyPlatformHeader, identifySender } from './senders.js';
@@ -705,6 +705,16 @@ function routeFinding(headers) {
 
   const items = hops.map((hop, index) => {
     const platform = hop.from ? identifySender(registrableDomain(hop.from)) : null;
+
+    // A hop that names itself with an encoded id rather than a machine. The
+    // first hop of an API injection is the usual place: the sending platform
+    // labels the connection with the customer it is billing, which is an
+    // identifier for the sender's account, not a host anyone could resolve.
+    const encodedName = decodeIdentifier(hop.from);
+    const reused = encodedName && headers.some(
+      (h) => !/^received$/i.test(h.name) && h.value.includes(encodedName),
+    );
+
     return {
       label: `Hop ${index + 1}${index === 0 ? ' — origin' : ''}`,
       value: [
@@ -712,8 +722,18 @@ function routeFinding(headers) {
         hop.by ? `by ${hop.by}` : null,
         hop.protocol ? `via ${hop.protocol}` : null,
       ].filter(Boolean).join('  '),
-      chips: [hop.date, platform ? `${platform.name} — bulk mail platform` : null]
-        .filter(Boolean),
+      chips: [
+        hop.date,
+        platform ? `${platform.name} — bulk mail platform` : null,
+        encodedName ? `decodes to ${encodedName}` : null,
+      ].filter(Boolean),
+      note: encodedName
+        ? `This hop is named after an encoded identifier rather than a machine.${
+          reused
+            ? ' The same value appears elsewhere in this header, which makes it the sender\'s account number on the platform — carried in the routing, where nobody looks.'
+            : ''
+        }`
+        : null,
       emphasis: index === 0,
       mono: true,
     };

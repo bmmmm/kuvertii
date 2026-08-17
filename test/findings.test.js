@@ -232,6 +232,34 @@ test('the SPF explanation is reported, not just the verdict word', () => {
   assert.match(body, /does not designate/, 'the server\'s own wording is kept');
 });
 
+test('a hop named after an encoded identifier is decoded', () => {
+  // Sending platforms label the first hop with the customer they are billing,
+  // base64'd. `MzE4NTk5NDA` is `31859940` — an account number, not a host.
+  const headers = parseHeaders(
+    'Received-SPF: pass (domain of bounces+31859940-8aa2-user=mailbox.example@em1.sender.example)\n'
+    + 'Received: from MzE4NTk5NDA by geopod-ismtpd-40 with HTTP id x; Mon, 17 Aug 2026 22:40:52 +0000\n',
+  );
+  const hop = analyse(headers).find((f) => f.id === 'route').items[0];
+  assert.ok(hop.chips.some((c) => /decodes to 31859940/.test(c)));
+  // The same number sits in the bounce address, which is what proves it is an
+  // account rather than a coincidence.
+  assert.match(hop.note, /account number/);
+});
+
+test('an ordinary hostname is never reported as an encoded identifier', () => {
+  // Forced through base64 these yield control bytes, not text — the property
+  // that separates them, since an account number reads as unremarkable prose.
+  const headers = parseHeaders(
+    'Received: from o8.ptr6101.mail.example.com by mx.example.net with ESMTPS id a\n'
+    + 'Received: by recvd-canary-54f88fd5bd-wpf6s with SMTP id b\n'
+    + 'Received: from mta-in-02 by gateway-99 with SMTP id c\n',
+  );
+  for (const hop of analyse(headers).find((f) => f.id === 'route').items) {
+    assert.equal(hop.note, null, `${hop.value} was misread as encoded`);
+    assert.ok(!hop.chips.some((c) => /decodes to/.test(c)));
+  }
+});
+
 test('a VERP address with routing ids folds onto the known recipient', () => {
   // Real schemes wedge ids between the prefix and the address:
   // bounces+31859940-8aa2-alice=example.org@sender. Reported on its own it
