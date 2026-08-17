@@ -23,15 +23,39 @@ test('every element app.js queries exists in the markup', () => {
   }
 });
 
-test('every module import resolves to a file that exists', () => {
-  const modules = ['js/app.js', 'js/findings.js', 'js/links.js', 'js/decode.js',
-    'js/unfold.js', 'js/blocklist.js', 'js/bloom.js', 'js/senders.js'];
-  for (const module of modules) {
-    const source = read(module);
-    for (const [, spec] of source.matchAll(/from '(\.[^']+)'/g)) {
+/** Every module reachable from an entry point, following relative imports. */
+function importGraph(entry) {
+  const seen = new Set();
+  const walk = (module) => {
+    if (seen.has(module)) return;
+    seen.add(module);
+    for (const [, spec] of read(module).matchAll(/from '(\.[^']+)'/g)) {
       const target = resolve(ROOT, dirname(module), spec);
       assert.ok(existsSync(target), `${module} imports missing ${spec}`);
+      walk(target.slice(ROOT.length + 1));
     }
+  };
+  walk(entry);
+  return seen;
+}
+
+test('every module import resolves to a file that exists', () => {
+  // Walked rather than listed, so a new module cannot be added without being
+  // checked, and a stale entry cannot rot in a hand-kept list.
+  const browser = importGraph('js/app.js');
+  const cli = importGraph('bin/kuvertii.js');
+  assert.ok(browser.size >= 8, `sanity: browser graph looks too small (${browser.size})`);
+  assert.ok(cli.size >= 5, `sanity: CLI graph looks too small (${cli.size})`);
+});
+
+test('nothing the browser loads reaches for a Node built-in', () => {
+  // The CLI shares the analysis modules but adds its own — clipboard access
+  // spawns a process, and the terminal renderer is no use to a page. If one of
+  // those were ever imported from the browser graph the page would break on
+  // load, and the CSP story with it, so the boundary is asserted rather than
+  // left to the directory layout.
+  for (const module of importGraph('js/app.js')) {
+    assert.doesNotMatch(read(module), /from 'node:/, `${module} is browser code`);
   }
 });
 
