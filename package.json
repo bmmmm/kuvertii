@@ -6,7 +6,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/",
+    "test": "node --test",
     "build:blocklist": "node tools/build-blocklist.mjs",
     "serve": "python3 -m http.server 8000"
   }
