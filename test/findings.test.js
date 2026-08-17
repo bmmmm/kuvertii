@@ -65,6 +65,24 @@ test('DMARC reporting addresses are not recipients', () => {
   assert.deepEqual(labels, ['you@mailbox.example']);
 });
 
+test('an absence is marked as one, not as a failure', () => {
+  // A missing field and an unsigned message are things the analysis could not
+  // do, not faults in the mail. Marking them like a forged sender would put
+  // them on a level they do not belong on.
+  const fragment = analyse(parseHeaders('X-Apple-MoveToFolder: INBOX\n'));
+  const missing = fragment.find((f) => f.id === 'completeness').items;
+  assert.ok(missing.every((i) => i.level === 'absent'), 'every missing field is marked absent');
+
+  const auth = analyse(parseHeaders(
+    'Authentication-Results: mx.example; spf=fail; dkim=none; dmarc=fail; bimi=pass\n',
+  )).find((f) => f.id === 'auth');
+  const level = (label) => auth.items.find((i) => i.label === label).level;
+
+  assert.equal(level('SPF = fail'), 'bad', 'a failure is a failure');
+  assert.equal(level('DKIM = none'), 'absent', 'nothing to check is not a failure');
+  assert.equal(level('BIMI = pass'), 'good', 'a pass counts even where a failure would not');
+});
+
 test('a full header is not accused of being partial', () => {
   assert.equal(byId('completeness'), undefined);
   assert.equal(msById('completeness'), undefined);

@@ -90,13 +90,18 @@ const ANSI = {
 };
 
 const TONE_COLOUR = { alert: ANSI.red, info: ANSI.blue, neutral: ANSI.dim };
-const LEVEL_COLOUR = { bad: ANSI.red, good: ANSI.green, caution: ANSI.yellow };
+const LEVEL_COLOUR = { bad: ANSI.red, good: ANSI.green, caution: ANSI.yellow, absent: ANSI.dim };
 
 // A verdict carries a mark as well as a colour, so that it survives everything
 // that loses colour: a pipe, --no-colour, NO_COLOR, a monochrome terminal, or
-// a reader who cannot distinguish red from green. All three are single-width,
+// a reader who cannot distinguish red from green. All four are single-width,
 // which keeps the labels aligned.
-const LEVEL_MARK = { bad: '✗', good: '✓', caution: '!' };
+//
+// `absent` is deliberately its own category rather than a failure. A missing
+// field or an unsigned message is not a fault in the mail — it is something
+// the analysis could not do, and marking it red would put it on a level with a
+// forged sender.
+const LEVEL_MARK = { bad: '✗', good: '✓', caution: '!', absent: '○' };
 
 /**
  * Build a renderer.

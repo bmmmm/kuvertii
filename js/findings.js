@@ -114,6 +114,7 @@ function completenessFinding(headers) {
     items: missing.map(([, name, cost]) => ({
       label: `${name} is missing`,
       value: cost,
+      level: 'absent',
     })),
   };
 }
@@ -768,9 +769,14 @@ function authFinding(headers) {
     items.push({
       label: `${mechanism.toUpperCase()} = ${verdict}`,
       value: wording[verdict] ?? wording.other ?? '',
-      level: DECISIVE.has(mechanism)
-        ? (verdict === 'pass' ? 'good' : verdict === 'fail' ? 'bad' : null)
-        : null,
+      // A pass is a pass on any mechanism. Failure is where the distinction
+      // matters: BIMI and ARC are absent or failing on most legitimate mail,
+      // so marking those red would cry wolf, while `none` is neither good nor
+      // bad — it means there was nothing to check.
+      level: verdict === 'pass' ? 'good'
+        : verdict === 'none' ? 'absent'
+          : (DECISIVE.has(mechanism) && verdict === 'fail') ? 'bad'
+            : null,
       note: DECISIVE.has(mechanism) ? null : 'Informational — commonly absent even on legitimate mail.',
     });
   }

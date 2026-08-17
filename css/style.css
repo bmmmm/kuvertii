@@ -201,7 +201,8 @@ button.primary {
    changes what a reader should do. Same three marks the terminal build uses. */
 .item--good .item__label::before,
 .item--bad .item__label::before,
-.item--caution .item__label::before {
+.item--caution .item__label::before,
+.item--absent .item__label::before {
   display: inline-block;
   width: 1.1em;
   font-weight: 700;
@@ -210,6 +211,10 @@ button.primary {
 .item--good .item__label::before { content: "✓"; color: var(--good); }
 .item--bad .item__label::before { content: "✗"; color: var(--bad); }
 .item--caution .item__label::before { content: "!"; color: var(--caution); }
+/* Absent is not a failure: a missing field is something the analysis could not
+   do, not a fault in the message. Marked, but never coloured like a forgery. */
+.item--absent .item__label::before { content: "○"; color: var(--ink-faint); }
+.item--absent .item__label { color: var(--ink-soft); }
 
 .item__value {
   margin-top: 0.15rem;

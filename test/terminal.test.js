@@ -114,12 +114,14 @@ test('a verdict is marked, not only coloured', () => {
       { label: 'SPF = pass', value: 'authorised', level: 'good' },
       { label: 'SPF = fail', value: 'not authorised', level: 'bad' },
       { label: 'Filtering skipped', value: 'a rule matched', level: 'caution' },
+      { label: 'DKIM = none', value: 'nothing to check', level: 'absent' },
       { label: 'Signed by domain', value: 'example.org' },
     ],
   });
   assert.match(rendered, /✓ SPF = pass/);
   assert.match(rendered, /✗ SPF = fail/);
   assert.match(rendered, /! Filtering skipped/);
+  assert.match(rendered, /○ DKIM = none/, 'an absence is marked, but not as a failure');
   assert.match(rendered, /· Signed by domain/, 'a plain row keeps the plain marker');
   assert.doesNotMatch(rendered, /\x1b\[/, 'and none of this needed colour');
 });
@@ -131,6 +133,7 @@ test('the marks the page uses match the ones the terminal prints', async () => {
   assert.match(css, /\.item--good \.item__label::before \{ content: "✓"/);
   assert.match(css, /\.item--bad \.item__label::before \{ content: "✗"/);
   assert.match(css, /\.item--caution \.item__label::before \{ content: "!"/);
+  assert.match(css, /\.item--absent \.item__label::before \{ content: "○"/);
 });
 
 test('colour is omitted entirely when switched off', () => {
