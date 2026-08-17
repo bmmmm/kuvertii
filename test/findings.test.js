@@ -33,6 +33,38 @@ test('a partial paste is reported as partial', () => {
   assert.match(named, /To is missing/);
 });
 
+test('a header missing only its display fields is not called a fragment', () => {
+  // Mail clients render From, To, Subject and Date above the header block, so
+  // a complete copy of "all headers" arrives without them. Thirty-eight fields
+  // is not a truncated paste, and telling the reader it is misleads them.
+  const many = [
+    'Return-Path: <bounces-x=mailbox.example@sender.example>',
+    'Original-Recipient: rfc822;x@mailbox.example',
+    'Authentication-Results: mx.example; dkim=pass; spf=pass',
+    'Received: from a by b with SMTP id c; Mon, 17 Aug 2026 10:00:00 +0000',
+    ...Array.from({ length: 15 }, (_, i) => `X-Filler-${i}: value`),
+  ].join('\n');
+
+  const finding = analyse(parseHeaders(`${many}\n`)).find((f) => f.id === 'completeness');
+  assert.ok(finding, 'still reported, since the fields do matter');
+  assert.match(finding.title, /kept a few fields to itself/);
+  assert.match(finding.lede, /not a truncated paste/);
+  assert.doesNotMatch(finding.lede, /several dozen/, 'no nonsense about its size');
+});
+
+test('DMARC reporting addresses are not recipients', () => {
+  // rua=/ruf= name whoever runs the sending domain. Reading them as recipients
+  // puts a stranger's postmaster among the people this was addressed to.
+  const headers = parseHeaders(
+    'From: news@sender.example\nTo: you@mailbox.example\n'
+    + 'Date: Mon, 17 Aug 2026 10:00:00 +0000\nMessage-ID: <a@sender.example>\n'
+    + 'Received: from a by b with SMTP id c; Mon, 17 Aug 2026 10:00:00 +0000\n'
+    + 'X-Dmarc-Policy: v=DMARC1;p=reject;rua=mailto:dmarc@sender.example;ruf=mailto:dmarc@sender.example\n',
+  );
+  const labels = analyse(headers).find((f) => f.id === 'recipients').items.map((i) => i.label);
+  assert.deepEqual(labels, ['you@mailbox.example']);
+});
+
 test('a full header is not accused of being partial', () => {
   assert.equal(byId('completeness'), undefined);
   assert.equal(msById('completeness'), undefined);

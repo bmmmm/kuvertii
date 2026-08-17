@@ -24,6 +24,12 @@ const RECIPIENT_FIELDS = [
 const SENDER_FIELDS = [
   'from', 'reply-to', 'sender', 'return-path', 'errors-to', 'x-sender',
   'list-owner', 'list-post', 'list-help', 'list-subscribe',
+  // Reporting and abuse contacts belong to whoever runs the sending domain.
+  // A DMARC record carries them as rua=/ruf= addresses, and reading those as
+  // recipients puts a stranger's postmaster in the list of people this was
+  // addressed to.
+  'x-dmarc-policy', 'x-report-abuse', 'x-report-abuse-to',
+  'x-complaints-to', 'abuse-reports-to',
 ];
 
 export function analyse(headers) {
@@ -86,14 +92,25 @@ function completenessFinding(headers) {
 
   // One absent field is ordinary — plenty of legitimate mail has no Message-ID
   // from a badly behaved sender, and a copied header often drops its last line.
-  // Two or more mean the paste is a fragment.
+  // Two or more mean something is genuinely absent.
   if (missing.length < 2) return null;
+
+  // What kind of absence, though, depends on how much else came through. Mail
+  // clients render From, To, Subject and Date above the header block rather
+  // than inside it, so a complete copy of "all headers" can still arrive
+  // without them. Thirty-eight fields is not a fragment; two is.
+  const displayFieldsOnly = headers.length >= 12
+    && missing.every(([field]) => ['from', 'to', 'date', 'message-id'].includes(field));
 
   return {
     id: 'completeness',
-    title: 'This looks like part of a header, not all of it',
+    title: displayFieldsOnly
+      ? 'Your mail program kept a few fields to itself'
+      : 'This looks like part of a header, not all of it',
     tone: 'info',
-    lede: `A delivered message always carries these fields, so their absence is a property of the paste rather than of the message. Everything below still holds for what was given — it is just answering a narrower question than it appears to. Copying the full header (Apple Mail: View → Message → All Headers; Gmail: Show original) usually turns ${headers.length} ${headers.length === 1 ? 'field' : 'fields'} into several dozen.`,
+    lede: displayFieldsOnly
+      ? `The rest of the header came through — ${headers.length} fields of it — so this is not a truncated paste. Mail clients display these particular fields above the header block instead of inside it, and copying "all headers" leaves them behind. Everything below is accurate; it simply had less to work with. Adding the missing lines by hand, in the form \`From: name@example.com\`, restores the findings that depend on them.`
+      : `A delivered message always carries these fields, so their absence is a property of the paste rather than of the message. Everything below still holds for what was given — it is just answering a narrower question than it appears to. A full header runs to several dozen fields; this one has ${headers.length}.`,
     items: missing.map(([, name, cost]) => ({
       label: `${name} is missing`,
       value: cost,
@@ -139,13 +156,11 @@ function recipientFinding(headers) {
   // matters most when the paste has lost its From: line — a partial header
   // otherwise reports the sender as a recipient hiding in encoded form, which
   // is both wrong and exactly backwards.
-  for (const field of ['received-spf', 'authentication-results']) {
-    for (const value of getAll(headers, field)) {
-      for (const [, claimed] of value.matchAll(
-        /\b(?:envelope-from|smtp\.mailfrom|header\.from)\s*=\s*([^\s;,)]+)/gi,
-      )) {
-        findAddresses(claimed).forEach((a) => senderAddresses.add(a));
-      }
+  for (const header of headers) {
+    for (const [, claimed] of header.value.matchAll(
+      /\b(?:envelope-from|smtp\.mailfrom|header\.from|rua|ruf)\s*=\s*(?:mailto:)?([^\s;,)]+)/gi,
+    )) {
+      findAddresses(claimed).forEach((a) => senderAddresses.add(a));
     }
   }
 
