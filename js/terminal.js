@@ -115,7 +115,11 @@ export function createRenderer({ colour = true, width = 80 } = {}) {
     const colourFor = LEVEL_COLOUR[item.level] ?? '';
     const marker = item.emphasis || item.level ? '▸' : '·';
 
-    out.push(`  ${paint(colourFor || ANSI.bold, `${marker} ${item.label}`)}`);
+    // Labels are defanged as well, which is not decoration: a blocklist verdict
+    // puts the offending hostname in the label — `evil.example is on a phishing
+    // blocklist` — so leaving labels alone published a live link for precisely
+    // the domain the reader has just been warned about.
+    out.push(`  ${paint(colourFor || ANSI.bold, `${marker} ${defang(item.label)}`)}`);
 
     // Mono values are structural — an id, a route, a decoded payload — and are
     // printed verbatim rather than wrapped, since folding them invents breaks.
@@ -142,8 +146,12 @@ export function createRenderer({ colour = true, width = 80 } = {}) {
 
   const renderFinding = (finding) => {
     const out = [''];
-    out.push(paint(TONE_COLOUR[finding.tone] ?? '', paint(ANSI.bold, finding.title)));
-    if (finding.lede) out.push(...wrapPainted(finding.lede, ANSI.dim));
+    // Titles and ledes are written by hand today, but they are the last two
+    // places a hostname could reach the screen unbroken. Defanged too, so the
+    // guarantee holds for the whole card rather than for the fields that
+    // happened to carry data when this was written.
+    out.push(paint(TONE_COLOUR[finding.tone] ?? '', paint(ANSI.bold, defang(finding.title))));
+    if (finding.lede) out.push(...wrapPainted(defang(finding.lede), ANSI.dim));
     out.push('');
 
     const seenNotes = new Set();

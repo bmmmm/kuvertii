@@ -55,6 +55,36 @@ test('no clickable link survives into rendered output', () => {
   }
 });
 
+test('a hostname in a label is defanged like any other', () => {
+  // Blocklist verdicts put the offending domain in the label, which is the one
+  // place a live link would be most harmful — the reader has just been told
+  // the domain is hostile.
+  const rendered = plain.renderFinding({
+    id: 'x',
+    title: 'Where the unsubscribe link really goes',
+    tone: 'alert',
+    items: [{
+      label: 'login.paypa1-secure.example is on a phishing blocklist',
+      value: 'Treat this link as hostile.',
+      level: 'bad',
+    }],
+  });
+  assert.match(rendered, /login\[\.\]paypa1-secure\[\.\]example/);
+  assert.doesNotMatch(rendered, /login\.paypa1-secure\.example/);
+});
+
+test('a hostname in a title or lede is defanged too', () => {
+  const rendered = plain.renderFinding({
+    id: 'x',
+    title: 'evil.example sent this',
+    tone: 'alert',
+    lede: 'The message came from evil.example.',
+    items: [],
+  });
+  assert.doesNotMatch(rendered, /evil\.example/);
+  assert.match(rendered, /evil\[\.\]example/);
+});
+
 test('the unsubscribe destination is reported, but defanged', () => {
   const out = renderAll(BULK_HEADER);
   assert.match(out, /unsub/i, 'the destination is still shown');

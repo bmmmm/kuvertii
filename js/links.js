@@ -5,7 +5,7 @@
 // this tool exists to protect. Everything below is structural, and it turns out
 // structure answers most of the question.
 
-import { readability } from './decode.js';
+import { clip, readability } from './decode.js';
 import { identifySender, KIND_LABELS } from './senders.js';
 
 // Approximation of the Public Suffix List — enough to stop `example.co.uk` from
@@ -207,13 +207,13 @@ export function inspectUnsubscribeLink(url, context = {}) {
     signals.push({
       level: 'bad',
       title: 'Destination asks for an account, not an unsubscribe',
-      detail: `The target path (${effective.pathname}) points at a login or payment flow. An unsubscribe never needs either.`,
+      detail: `The target path points at a login or payment flow, and an unsubscribe never needs either: ${clip(effective.pathname, 80)}`,
     });
   } else if (UNSUB_PATH_RE.test(path)) {
     signals.push({
       level: 'good',
       title: 'Destination path matches an unsubscribe endpoint',
-      detail: `${effective.pathname} is what a real opt-out looks like.`,
+      detail: `The path is shaped like a genuine opt-out: ${clip(effective.pathname, 80)}`,
     });
   }
 

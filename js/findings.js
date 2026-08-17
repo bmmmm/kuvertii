@@ -4,7 +4,7 @@
 // from. The tone is dry rather than alarmed: the goal is for someone to
 // understand their own mail, not to be told what to feel about it.
 
-import { bestDecode, decodeSegments, findAddresses, prettifyNulls } from './decode.js';
+import { bestDecode, clip, decodeSegments, findAddresses, prettifyNulls } from './decode.js';
 import { extractUrls, inspectUnsubscribeLink, registrableDomain } from './links.js';
 import { microsoftVerdicts } from './microsoft.js';
 import { identifyPlatformHeader, identifySender } from './senders.js';
@@ -41,20 +41,6 @@ export function analyse(headers) {
   push(judgementFinding(headers));
 
   return findings;
-}
-
-/**
- * Shorten an opaque value for display.
- *
- * Tracking payloads run to kilobytes of base64. The head and tail are what a
- * reader can act on — enough to recognise the value again, and to see that it
- * is an id rather than a sentence — so the middle is what gets dropped.
- */
-function clip(value, max = 160) {
-  const text = String(value ?? '').trim();
-  if (text.length <= max) return text;
-  const keep = Math.floor((max - 3) / 2);
-  return `${text.slice(0, keep)}...${text.slice(-keep)}`;
 }
 
 // ---------------------------------------------------------------- recipients

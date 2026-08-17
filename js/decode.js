@@ -204,3 +204,17 @@ export function findAddresses(text) {
 export function prettifyNulls(text) {
   return String(text).replace(/\0+/g, ' · ').trim();
 }
+
+/**
+ * Shorten an opaque value for display.
+ *
+ * Tracking payloads run to kilobytes of base64. The head and tail are what a
+ * reader can act on — enough to recognise the value again, and to see that it
+ * is an id rather than a sentence — so the middle is what gets dropped.
+ */
+export function clip(value, max = 160) {
+  const text = String(value ?? '').trim();
+  if (text.length <= max) return text;
+  const keep = Math.floor((max - 3) / 2);
+  return `${text.slice(0, keep)}...${text.slice(-keep)}`;
+}
