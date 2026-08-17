@@ -78,6 +78,45 @@ A reputation *API* would answer better, and was deliberately not used: querying
 one means telling a third party which link you are looking at, and that link
 contains your recipient id.
 
+## In the terminal
+
+The same analysis, rendered for a terminal:
+
+```sh
+kuvertii                     # press space to read the clipboard, q to quit
+kuvertii message.eml         # a header file or a whole .eml
+pbpaste | kuvertii           # or anything else on stdin
+```
+
+Input never comes from a line prompt. A header is folded, indentation-sensitive
+and routinely tens of kilobytes, which is precisely what a prompt mangles —
+reading the clipboard on a keypress sidesteps bracketed-paste quirks, editor
+auto-indent and buffer limits in one step.
+
+**Links are printed defanged** — `hxxps://example[.]com` — and this is not
+decoration. Ghostty, iTerm2, WezTerm, Kitty and VS Code all scan output for URL
+patterns and turn what they find into a click target; that is the terminal's
+doing and no program can switch it off. Printing a phishing destination as
+plain text would hand you the one action this tool exists to prevent. Email
+addresses stay readable, since their dots carry the meaning and a `mailto:` is
+harmless.
+
+Redirects are still resolved by decoding the link, never by requesting it. A
+`HEAD` request would resolve them more reliably, and that is exactly why there
+is a test asserting no module here can reach the network: following the link
+would report your click to the tracker and confirm your address to a phisher.
+
+### About emptying the clipboard
+
+After a successful read the clipboard is emptied, unless you pass `--keep`.
+Treat this as hygiene, not as a guarantee: clipboard history managers (Raycast,
+Alfred, Maccy, Paste) and cross-device sync will already hold a copy, and
+nothing here removes those. It is also skipped when nothing parsed, so a failed
+read never costs you the header.
+
+The phishing blocklist is read from `data/`, which is built by CI rather than
+committed. Without it the check reports itself unavailable — never as clean.
+
 ## Related work
 
 Header analysis is a well-served field, but almost all of it is written from
@@ -110,7 +149,7 @@ No build step, no dependencies. Node is used only to run the tests and to bake
 the blocklist.
 
 ```sh
-node --test                          # 76 tests, stdlib only
+node --test                          # 88 tests, stdlib only
 node tools/build-blocklist.mjs       # writes data/ (gitignored, built in CI)
 python3 -m http.server 8000          # then open localhost:8000
 ```
