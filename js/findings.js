@@ -109,16 +109,20 @@ function recipientFinding(headers) {
 
   if (!open.size && !hidden.size) return null;
 
+  // Where an address was found is a list of short facts, not a sentence — it
+  // goes into chips so the count is visible at a glance and the prose is left
+  // to say the one thing prose is good for: what it means.
+  const placeChips = (entries) => entries.map((e) => `${e.field} · ${e.method}`);
+
   const items = [];
   for (const [address, fields] of open) {
     const encodings = hidden.get(address) ?? [];
     items.push({
       label: address,
-      value: `in the clear: ${[...new Set(fields)].join(', ')}`,
+      value: `Written openly in ${[...new Set(fields)].join(', ')}`,
+      chips: placeChips(encodings),
       note: encodings.length
-        ? `Also encoded ${encodings.length} more ${encodings.length === 1 ? 'time' : 'times'}: ${encodings
-            .map((e) => `${e.field} (${e.method})`)
-            .join('; ')}`
+        ? `Carried ${encodings.length} further ${encodings.length === 1 ? 'time' : 'times'} in encoded form.`
         : null,
       emphasis: encodings.length > 0,
     });
@@ -127,8 +131,8 @@ function recipientFinding(headers) {
     if (open.has(address)) continue;
     items.push({
       label: address,
-      value: 'only found encoded — not in any visible field',
-      note: entries.map((e) => `${e.field} (${e.method})`).join('; '),
+      value: 'Never written openly — recoverable only by decoding',
+      chips: placeChips(entries),
       emphasis: true,
     });
   }
@@ -235,7 +239,7 @@ function unsubscribeFinding(headers) {
       items.push({
         label: 'Real destination behind the redirect',
         value: report.destination,
-        note: 'Decoded from the link itself. No request was made to find this out.',
+        chips: ['decoded from the link', 'no request made'],
         mono: true,
       });
     }
@@ -380,9 +384,8 @@ function routeFinding(headers) {
         hop.by ? `by ${hop.by}` : null,
         hop.protocol ? `via ${hop.protocol}` : null,
       ].filter(Boolean).join('  '),
-      note: [hop.date, platform ? `${platform.name} — a known bulk mail platform` : null]
-        .filter(Boolean)
-        .join('  ·  ') || null,
+      chips: [hop.date, platform ? `${platform.name} — bulk mail platform` : null]
+        .filter(Boolean),
       emphasis: index === 0,
       mono: true,
     };

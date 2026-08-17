@@ -7,8 +7,11 @@ import { BULK_HEADER, RECIPIENT } from './fixtures.js';
 
 const report = () => analyse(parseHeaders(BULK_HEADER));
 const byId = (id) => report().find((f) => f.id === id);
+// Everything a reader sees on a row: label, value, chips and note alike.
 const text = (finding) =>
-  finding.items.map((i) => `${i.label} ${i.value} ${i.note ?? ''}`).join('\n');
+  finding.items
+    .map((i) => `${i.label} ${i.value} ${(i.chips ?? []).join(' ')} ${i.note ?? ''}`)
+    .join('\n');
 
 test('the recipient is found in every place it hides', () => {
   const finding = byId('recipients');
@@ -16,14 +19,16 @@ test('the recipient is found in every place it hides', () => {
 
   const entry = finding.items.find((i) => i.label === RECIPIENT);
   assert.ok(entry, 'the address is reported');
-  assert.match(entry.value, /in the clear/);
+  assert.match(entry.value, /Written openly/);
 
   // The point of the tool: the same address encoded in the mailer fields, the
-  // unsubscribe token and the folded continuation — not just in To:.
-  assert.ok(entry.note, 'encoded occurrences are reported');
-  assert.match(entry.note, /X-Mailer-Info/);
-  assert.match(entry.note, /List-Unsubscribe/);
-  assert.match(entry.note, /reversed/);
+  // unsubscribe token and the folded continuation — not just in To:. Each
+  // hiding place is its own chip, so the count is legible at a glance.
+  const places = entry.chips.join('\n');
+  assert.match(places, /X-Mailer-Info/);
+  assert.match(places, /List-Unsubscribe/);
+  assert.match(places, /reversed/);
+  assert.match(entry.note, /further \d+ times|further time/, 'the prose states the count, not the list');
   assert.equal(finding.tone, 'alert');
 });
 

@@ -10,7 +10,16 @@ const results = document.querySelector('#results');
 const emptyState = document.querySelector('#empty-state');
 const status = document.querySelector('#status');
 
-/** Build an element without ever handing untrusted text to innerHTML. */
+/**
+ * Build an element without ever handing untrusted text to innerHTML.
+ *
+ * Everything rendered here — labels, values, chips — may contain text taken
+ * straight from the pasted header, so `textContent` is the only way anything
+ * is written. In particular no branch of this file ever creates an `<a>`: a
+ * URL out of a header is displayed as inert text and must never become
+ * clickable, because the click is the thing the sender is waiting for. The
+ * only links on this page are the hand-written ones in the footer.
+ */
 function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -18,7 +27,7 @@ function el(tag, className, text) {
   return node;
 }
 
-function renderItem(item) {
+function renderItem(item, seenNotes) {
   const row = el('div', 'item');
   if (item.emphasis) row.classList.add('item--emphasis');
   if (item.level) row.classList.add(`item--${item.level}`);
@@ -26,7 +35,19 @@ function renderItem(item) {
   row.append(el('div', 'item__label', item.label));
   const value = el('div', item.mono ? 'item__value item__value--mono' : 'item__value', item.value);
   row.append(value);
-  if (item.note) row.append(el('div', 'item__note', item.note));
+
+  if (item.chips?.length) {
+    const chips = el('div', 'item__chips');
+    item.chips.forEach((chip) => chips.append(el('span', 'chip', chip)));
+    row.append(chips);
+  }
+
+  // A note that applies to several rows is worth reading once. Repeating it on
+  // every row is what turns a list of findings into a wall of prose.
+  if (item.note && !seenNotes?.has(item.note)) {
+    seenNotes?.add(item.note);
+    row.append(el('div', 'item__note', item.note));
+  }
   return row;
 }
 
@@ -36,7 +57,8 @@ function renderFinding(finding) {
   if (finding.lede) card.append(el('p', 'card__lede', finding.lede));
 
   const list = el('div', 'card__items');
-  finding.items.forEach((item) => list.append(renderItem(item)));
+  const seenNotes = new Set();
+  finding.items.forEach((item) => list.append(renderItem(item, seenNotes)));
   card.append(list);
   return { card, list };
 }

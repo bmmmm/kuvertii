@@ -210,6 +210,38 @@ button.primary {
   color: var(--ink);
 }
 
+/* Chips carry the short structural facts — where a value was found, how it was
+   decoded, which platform issued it. Keeping them out of the prose is what lets
+   a card be scanned instead of read. */
+.item__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+}
+
+.chip {
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  line-height: 1.5;
+  /* A chip carrying a header name and a decode method can be longer than a
+     phone is wide, so it has to be allowed to break rather than overflow. */
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+/* On a highlighted row the chips sit on a tinted background, so they need a
+   surface of their own to stay legible. */
+.item--emphasis .chip,
+.item--bad .chip,
+.item--good .chip,
+.item--caution .chip { background: var(--surface); }
+
 .item__note {
   margin-top: 0.35rem;
   color: var(--ink-faint);
