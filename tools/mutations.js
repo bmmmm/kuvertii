@@ -208,6 +208,17 @@ function neutraliseDisabledByMutation(text) {
     // reader sees <U+009D> in the output and no finding explaining it.
   },
 
+  {
+    id: 'defang-needs-a-word-boundary',
+    promise: 'No live URL survives into terminal output.',
+    file: 'js/terminal.js',
+    find: `const URL_RE = /(?:https?|ftps?):\\/\\/[^\\s<>"'\`]+/i;`,
+    replace: `const URL_RE = /\\b(?:https?|ftps?):\\/\\/[^\\s<>"'\`]+/i;`,
+    mustKill: ['a scheme is broken wherever it appears, not only at a word boundary'],
+    // One underscore in front of the scheme was the whole bypass: no word
+    // boundary, no split, and the hostname pass then spared it as a payload.
+  },
+
   // ------------------------------------------------- promises with no gate yet
   //
   // Everything below is expected to survive today. Each one is a promise the

@@ -24,7 +24,19 @@ import { neutralise } from './control.js';
 // already imposes: 63 octets per label, and no real hostname carries twenty of
 // them. URL_RE's tail is left open because it has nothing to backtrack into —
 // a single negated class matches once and stops.
-const URL_RE = /\b(?:https?|ftps?):\/\/[^\s<>"'`]+/i;
+//
+// No \b before the scheme, and that is the whole of a fix for a real bypass.
+// A word boundary needs a non-word character on one side, so `_https://evil` —
+// underscore, then the scheme — had none, and the URL was never split out for
+// defanging. It then reached `bracketHosts` inside a token long enough to look
+// like an encoded payload, so its hostname was spared as well, and the line was
+// printed with the scheme, the host and the path byte-for-byte intact.
+//
+// The premise was wrong rather than the pattern. Ghostty, iTerm2, WezTerm,
+// Kitty and VS Code scan a line for the scheme and linkify from wherever they
+// find it; none of them require a word boundary first. So neither do we: an
+// occurrence anywhere is an occurrence.
+const URL_RE = /(?:https?|ftps?):\/\/[^\s<>"'`]+/i;
 const EMAIL_RE = /(?<![a-z0-9._%+-])[a-z0-9._%+-]{1,64}@[a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){0,10}\.[a-z]{2,24}\b/i;
 const BARE_HOST_RE = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.){1,20}[a-z]{2,24}\b/gi;
 
@@ -62,6 +74,11 @@ function defangUrl(url) {
  * payload is long and carries characters no hostname may contain.
  */
 function isPayloadToken(token) {
+  // A token containing a scheme is a URL however long it is, and URLs are
+  // defanged rather than exempted. Without this the exemption was the second
+  // half of the bypass above: past the split, a hostname sitting inside a
+  // 40-character token was handed back unbracketed.
+  if (/(?:https?|ftps?):\/\//i.test(token)) return false;
   return token.length > 40 && /[+/=]/.test(token);
 }
 

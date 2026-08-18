@@ -172,3 +172,35 @@ test('the CLI reaches for nothing that could open a link', async () => {
     assert.doesNotMatch(source, /\bopen\b.*\bbrowser\b/i, 'nothing that opens a browser');
   }
 });
+
+test('a scheme is broken wherever it appears, not only at a word boundary', () => {
+  // The bypass this closes: `\b` needs a non-word character on one side, and an
+  // underscore is a word character, so `_https://evil.example/…` matched
+  // nothing and was never split out for defanging. It then reached the hostname
+  // pass inside a token long enough to read as an encoded payload, which spared
+  // the host as well — scheme, host and path printed byte-for-byte.
+  //
+  // Terminals do not require a word boundary before linkifying. Neither do we.
+  for (const value of [
+    '_https://evil.example/login?u=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+    'x1https://evil.example/a',
+    'read=https://evil.example/a',
+    'https://evil.example/a',
+  ]) {
+    const out = defang(value);
+    assert.doesNotMatch(out, /https:\/\//, value);
+    assert.match(out, /hxxps:/, value);
+    assert.doesNotMatch(out, /evil\.example/, `the host is bracketed too: ${value}`);
+  }
+});
+
+test('a long payload token is still left alone, unless it carries a scheme', () => {
+  // The exemption exists for a reason and keeps it: a tracking blob contains
+  // stretches that read as label-dot-TLD, and bracketing them corrupts a value
+  // the reader may want to copy verbatim.
+  const blob = 'upn=aHR0cHM6Ly9zaG9wLmV4YW1wbGUu.SdBcvi+abc/def=';
+  assert.equal(defang(blob), blob, 'a genuine payload is untouched');
+
+  const withScheme = `${blob}https://evil.example/x`;
+  assert.doesNotMatch(defang(withScheme), /https:\/\//, 'a scheme inside one is not exempt');
+});
