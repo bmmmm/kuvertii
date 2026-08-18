@@ -68,7 +68,7 @@
 </main>
 
 <footer class="colophon">
-  <p><strong>Nothing you paste leaves this page.</strong> There is no server, no analytics and no storage — not even <code>localStorage</code>. The header lives in one variable and is gone when you close the tab. A Content-Security-Policy in the page source blocks every outbound request, so this is enforced by your browser rather than promised by us. Turn off your network and it still works.</p>
+  <p><strong>Nothing you paste leaves this page.</strong> There is no server, no analytics and no storage — not even <code>localStorage</code>. The header lives in one variable and is gone when you close the tab. A Content-Security-Policy in the page source allows one destination and denies the rest, so this is enforced by your browser rather than promised by us. Turn off your network and it still works.</p>
   <p>The phishing blocklist is a snapshot of <a href="https://github.com/mitchellkrogza/Phishing.Database" rel="noopener noreferrer">Phishing.Database</a> (MIT), baked in at build time and served from this origin — the domain you check is never sent anywhere. A hit is a warning; a miss is not an all-clear.</p>
   <p>Saving this page and opening it from your disk will not work: browsers fetch ES modules over CORS, and a <code>file://</code> page has no origin to grant. Serve the directory instead — <code>node tools/serve.mjs</code> — or use the terminal version, which needs no browser at all.</p>
   <p><a href="https://github.com/bmmmm/kuvertii" rel="noopener noreferrer">Source</a> · GPL-3.0-or-later</p>

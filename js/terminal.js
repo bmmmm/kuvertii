@@ -37,7 +37,19 @@ import { neutralise } from './control.js';
 // find it; none of them require a word boundary first. So neither do we: an
 // occurrence anywhere is an occurrence.
 const URL_RE = /(?:https?|ftps?):\/\/[^\s<>"'`]+/i;
-const EMAIL_RE = /(?<![a-z0-9._%+-])[a-z0-9._%+-]{1,64}@[a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){0,10}\.[a-z]{2,24}\b/i;
+// The trailing lookahead is a defanging fix, not an address-parsing nicety.
+// URLs and addresses are split out in one alternation, and the engine takes
+// whichever alternative matches earliest — so on
+// `noreply@paypal.https://evil-login.example/verify` the address pattern won at
+// offset 0 and ate `noreply@paypal.https`, treating `https` as the TLD with the
+// following colon satisfying \b. What was left, `://evil-login.example/verify`,
+// carries no scheme, so it went to the hostname pass instead — where a long
+// enough tail made it read as an encoded payload and the host was spared too.
+// The line printed with a live, clickable phishing URL in it.
+//
+// No address ends immediately before `://`. Refusing that reading lets the URL
+// alternative match where it should.
+const EMAIL_RE = /(?<![a-z0-9._%+-])[a-z0-9._%+-]{1,64}@[a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){0,10}\.[a-z]{2,24}\b(?!:\/\/)/i;
 const BARE_HOST_RE = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.){1,20}[a-z]{2,24}\b/gi;
 
 // One capturing split, so URLs and addresses land in segments of their own and
@@ -92,13 +104,26 @@ function isPayloadToken(token) {
  * dense in hostnames, which is exactly the shape of a long Received chain.
  */
 function bracketHosts(part) {
+  // Any whitespace, not the ASCII space alone. `wrap()` breaks lines on
+  // /\s+/, which in JavaScript includes U+00A0, U+3000, U+2000-U+200A, U+202F
+  // and U+205F — so a sender who separated a tracking blob from a hostname with
+  // a no-break space produced one token here and two words on screen. The
+  // hostname was exempted as part of a payload and then printed as a
+  // free-standing, linkifiable name. The two functions have to agree on what a
+  // word is, or the exemption applies to something the reader never sees as one.
+  const SPACE = /\s/;
+  const nextSpace = (from) => {
+    for (let i = from; i < part.length; i++) if (SPACE.test(part[i])) return i;
+    return -1;
+  };
+
   let before = -1;
-  let after = part.indexOf(' ');
+  let after = nextSpace(0);
 
   return part.replace(BARE_HOST_RE, (host, offset) => {
     while (after !== -1 && after < offset) {
       before = after;
-      after = part.indexOf(' ', after + 1);
+      after = nextSpace(after + 1);
     }
     const token = part.slice(before + 1, after === -1 ? part.length : after);
     return isPayloadToken(token) ? host : host.replace(/\./g, '[.]');

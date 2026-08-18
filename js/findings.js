@@ -380,9 +380,19 @@ function recipientFinding(headers) {
   for (const header of headers) {
     if (SENDER_FIELDS.includes(header.name.toLowerCase())) continue;
 
+    // Addresses already legible in this field, whatever the decoders make of
+    // the rest of it. A decoder returns the whole value with one part changed,
+    // so anything plainly written alongside an encoded token rides along in the
+    // result — and was then reported as "never written openly, recoverable only
+    // by decoding" about text sitting in the clear two lines above. Percent
+    // decoding made this easy to hit, because one `%20` anywhere qualifies a
+    // whole field, but the same was always true of base64 and quoted-printable.
+    const inTheClear = new Set(findAddresses(header.value));
+
     const record = (text, method) => {
       for (const address of findAddresses(text)) {
         if (senderAddresses.has(address)) continue;
+        if (inTheClear.has(address)) continue;
         if (BOUNCE_DOMAIN_RE.test(address.split('@')[1] ?? '')) continue;
         if (!hidden.has(address)) hidden.set(address, []);
         const entries = hidden.get(address);
@@ -1419,8 +1429,22 @@ function authFinding(headers) {
   // someone outside wrote as though they were a colleague. It decided nothing
   // about this headline, so SPF, DKIM and DMARC all passing was enough to print
   // "every check passed" directly above it.
-  const decisivePasses = [...DECISIVE].filter((mechanism) => verdicts[mechanism] === 'pass').length;
-  const allPass = !failed.length && compauth !== 'fail' && decisivePasses >= 2;
+  // Every decisive verdict that exists has to be `pass`, not merely "none of
+  // them said fail". The first rewrite of this line fixed the case that had been
+  // reported — arc and bimi passing while SPF and DMARC failed — and left every
+  // other non-pass word invisible: softfail, neutral, temperror, permerror,
+  // DKIM policy, DMARC none. `spf=softfail` with two passes still earned the
+  // headline "Every check passed", printed above a row explaining that the
+  // domain lists this server as probably not authorised.
+  //
+  // 168 of the 3,528 combinations, and the reason they survived the first fix
+  // is that the fix was written against a reported case rather than against the
+  // vocabulary. The vocabulary is enumerated in test/verdicts.js; the invariant
+  // there now walks all of it.
+  const decisiveVerdicts = [...DECISIVE].map((mechanism) => verdicts[mechanism]).filter(Boolean);
+  const allPass = decisiveVerdicts.length >= 2
+    && decisiveVerdicts.every((verdict) => verdict === 'pass')
+    && compauth !== 'fail';
 
   return {
     id: 'auth',
@@ -1549,6 +1573,38 @@ function withoutComments(text) {
   return out;
 }
 
+/**
+ * Only the comments — the exact complement of `withoutComments`.
+ *
+ * Needed because the TLS evidence is a claim about what a comment says, and the
+ * first version of it tested the whole clause. `from tls.attacker.example … with
+ * SMTP` has no encryption anywhere and no TLS inside any comment, and it was
+ * reported as "encrypted hop, according to a comment rather than the protocol"
+ * — a false statement about a security property, from a hostname the sending
+ * client chooses. Worse than the bug it replaced, which at least erred towards
+ * saying a hop was less protected than it was.
+ */
+function commentsOnly(text) {
+  let depth = 0;
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '\\') { i += 1; continue; }
+    if (ch === '(') { depth += 1; continue; }
+    if (ch === ')') { depth = Math.max(0, depth - 1); out += ' '; continue; }
+    if (depth) out += ch;
+  }
+  return out;
+}
+
+// How servers actually spell it. Exchange writes `version=TLS1_2`, Postfix
+// `(using TLSv1.3 …)`, others just `TLS`. The first pattern here required a word
+// boundary after the version — `\bTLS(?:v[\d.]+)?\b` — which `TLS1_2` never
+// provides, since `1` and `_` are both word characters. So the guard written to
+// stop Microsoft 365 hops being called plaintext did not fire on a single
+// Microsoft 365 hop.
+const TLS_TOKEN = /\bTLS[v._\d]*/i;
+
 function parseReceived(value) {
   const [head, tail] = splitOnce(value, ';');
   const clause = withoutComments(head);
@@ -1561,7 +1617,7 @@ function parseReceived(value) {
     // (using TLSv1.3 …)` are being sloppy rather than unencrypted. Reporting
     // those as plaintext would be the same kind of wrong in the other
     // direction, so the two cases are told apart rather than merged.
-    tlsInComment: /\bTLS(?:v[\d.]+)?\b/i.test(head),
+    tlsInComment: TLS_TOKEN.test(commentsOnly(head)),
     date: tail?.trim() || null,
   };
 }

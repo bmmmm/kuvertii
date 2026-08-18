@@ -188,3 +188,29 @@ test('a long payload token is still left alone, unless it carries a scheme', () 
   const withScheme = `${blob}https://evil.example/x`;
   assert.doesNotMatch(defang(withScheme), /https:\/\//, 'a scheme inside one is not exempt');
 });
+
+test('an address-shaped prefix cannot hide the scheme behind it', () => {
+  // URLs and addresses are split out in one alternation and the engine takes
+  // whichever matches earliest, so `noreply@paypal.https://evil.example/x` was
+  // read as an address ending in the TLD `https` — leaving `://evil.example/x`,
+  // which carries no scheme, to the hostname pass, where a long tail made it
+  // read as a payload and the host was spared too. A live, clickable phishing
+  // URL, printed by the tool whose stated purpose is that this never happens.
+  const out = defang('noreply@paypal.https://evil-login.example/verify?u=AAAAAAAAAAAAAAAAAAAAAAAA');
+
+  assert.doesNotMatch(out, /https:\/\//);
+  assert.match(out, /hxxps:/);
+  assert.doesNotMatch(out, /evil-login\.example/);
+});
+
+test('a no-break space separates words here exactly as it does on screen', () => {
+  // `bracketHosts` found token boundaries with indexOf(' ') while `wrap()`
+  // breaks on /\s+/, which in JavaScript includes U+00A0 and friends. A sender
+  // who separated a tracking blob from a hostname with a no-break space got one
+  // token here — long, containing '=', therefore exempt — and two words on
+  // screen, the second of which a terminal will happily linkify.
+  const nbsp = String.fromCodePoint(0x00a0);
+  const out = defang(`upn=aHR0cHM6Ly9zaG9wLmV4YW1wbGUu+abc/def=${nbsp}evil.example`);
+
+  assert.match(out, /evil\[\.\]example/, 'the hostname is bracketed');
+});

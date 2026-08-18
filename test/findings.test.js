@@ -846,3 +846,57 @@ test('an address hidden two layers deep is counted, not just displayed', () => {
     `the nested copy is named: ${JSON.stringify(row.chips)}`,
   );
 });
+
+test('a TLS-shaped hostname does not make a plaintext hop encrypted', () => {
+  // `from` in a Received line is the name the connecting client supplied, so a
+  // sender picks it. The first version of the comment check tested the whole
+  // clause rather than its comments, and `from tls.attacker.example … with SMTP`
+  // — no encryption anywhere — was reported as an encrypted hop. A false claim
+  // about a security property, from attacker-controlled input, in the direction
+  // that reassures.
+  const finding = analyse(parseHeaders([
+    'From: a@b.example',
+    'Received: from tls.attacker.example by mx.example.net with SMTP id 42;',
+    '        Mon, 17 Aug 2026 10:00:00 +0000',
+  ].join('\n'))).find((f) => f.id === 'route');
+
+  assert.ok(finding.items[0].chips.includes('unencrypted hop'), JSON.stringify(finding.items[0].chips));
+});
+
+test('a Microsoft 365 hop declaring TLS1_2 is not called plaintext', () => {
+  // Exchange writes `version=TLS1_2`, and the pattern guarding this required a
+  // word boundary after the version — which `1` and `_` never provide. So the
+  // guard written to stop exactly this did not fire on a single real hop, and
+  // every internal Microsoft hop was labelled unencrypted.
+  const finding = analyse(parseHeaders([
+    'From: a@b.example',
+    'Received: from mail.example.com (10.0.0.1) by mx.example.net with Microsoft SMTP Server',
+    '        (version=TLS1_2, cipher=TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384) id 15.20.7897.20;',
+    '        Mon, 17 Aug 2026 10:00:00 +0000',
+  ].join('\n'))).find((f) => f.id === 'route');
+
+  assert.ok(
+    finding.items[0].chips.some((chip) => /according to a comment/.test(chip)),
+    JSON.stringify(finding.items[0].chips),
+  );
+});
+
+test('an address written in the open is never called a hidden one', () => {
+  // A decoder returns the whole value with one part changed, so anything
+  // plainly written beside an encoded token rides along in the result. With
+  // percent-decoding added, one `%20` anywhere qualified a whole field — and an
+  // address sitting in the clear was reported as "never written openly,
+  // recoverable only by decoding".
+  const finding = analyse(parseHeaders([
+    'From: shop@sender.example',
+    'To: reader@example.org',
+    'X-Campaign: campaign=summer%20sale&to=reader@example.org',
+  ].join('\n'))).find((f) => f.id === 'recipients');
+
+  const row = finding.items.find((i) => i.label === 'reader@example.org');
+  assert.match(row.value, /Written openly/);
+  assert.doesNotMatch(text(finding), /recoverable only by decoding/);
+  assert.deepEqual(row.chips ?? [], [], 'no field is named as having hidden it');
+  assert.doesNotMatch(finding.lede, /appears \d+ more time/, 'and the count is not inflated');
+  assert.doesNotMatch(text(finding), /Carried \d+ further time/);
+});

@@ -180,5 +180,25 @@ export function scanControls(text) {
   // Anything in the C1 block that is not one of the named introducers.
   if (/[\u0080-\u009F]/.test(value) && !effects.length) add('carries control bytes a terminal may act on');
 
+  // Whatever `hasControls` flagged and the named patterns above did not reach.
+  //
+  // The lists above were written against the two hand-kept ranges this module
+  // used to filter by. Widening the filter to Unicode categories without
+  // widening them left a gap between accusing and explaining: a soft hyphen, an
+  // Arabic number sign, a musical formatting character — 21 codepoints in the
+  // BMP alone, more above it — made `hasControls` true and `scanControls`
+  // return nothing, so the report announced that the header carried
+  // instructions and then described the finding as "It ." with no cause named.
+  //
+  // Worse than either failure alone: a reader told something is wrong and shown
+  // nothing has been given a reason to distrust the next thing the tool says.
+  // So the fallbacks are keyed to the same categories the filter uses, and the
+  // test below asserts the two can never disagree again.
+  if (!effects.length && hasControls(value)) {
+    if (/\p{Cf}/u.test(value)) add('carries formatting characters that change how the text is laid out while rendering as nothing');
+    else if (/\p{Cc}/u.test(value)) add('carries control bytes a terminal may act on');
+    else add('carries characters that are instructions to the renderer rather than text');
+  }
+
   return effects;
 }

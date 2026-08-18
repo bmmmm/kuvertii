@@ -103,6 +103,11 @@ function runSuite(root) {
       encoding: 'utf8',
       maxBuffer: 64 * 1024 * 1024,
       stdio: ['ignore', 'pipe', 'pipe'],
+      // node:test has no per-test timeout by default, so the natural mutation
+      // for any loop or regex — one that stops terminating — hung this harness
+      // with no output and no verdict. A kill is still a kill, but it has to
+      // arrive.
+      timeout: 5 * 60 * 1000,
     });
   } catch (error) {
     // A red suite exits non-zero, which execFileSync reports as a throw. That
@@ -112,7 +117,10 @@ function runSuite(root) {
   }
 
   const failed = [...stdout.matchAll(/^\s*not ok \d+ - (.+)$/gm)].map(([, name]) => name.trim());
-  return { status, failed, stdout };
+  // A timeout or a crashed runner exits non-zero without failing a test, which
+  // would otherwise read exactly like a mutation being caught.
+  const ranToCompletion = /^1\.\.\d+$/m.test(stdout) || failed.length > 0;
+  return { status, failed, stdout, ranToCompletion };
 }
 
 function main() {
@@ -126,6 +134,30 @@ function main() {
   }
 
   const files = trackedFiles();
+
+  // Baseline first. Every verdict below is "the suite went red because of this
+  // mutation", and that sentence is only true if the suite was green without
+  // it. An untracked scratch test, a half-finished edit, a machine where one
+  // test cannot run — any of them would otherwise make all 23 mutations report
+  // KILLED and the summary print a confident `unguarded: 0`.
+  const baseline = mkdtempSync(join(tmpdir(), 'kuvertii-baseline-'));
+  try {
+    copyTree(files, baseline);
+    const { status, failed } = runSuite(baseline);
+    if (status !== 0) {
+      process.stderr.write(
+        `The suite is not green before any mutation is applied — ${failed.length} test(s) already failing:\n`
+        + failed.slice(0, 5).map((name) => `  ${name}\n`).join('')
+        + 'Every result below would say KILLED for that reason alone. Fix the tree first.\n',
+      );
+      process.exitCode = 1;
+      return;
+    }
+  } finally {
+    rmSync(baseline, { recursive: true, force: true });
+  }
+  process.stdout.write(`${paint(DIM, 'baseline: suite green before any mutation')}\n\n`);
+
   const results = [];
 
   process.stdout.write(`${paint(BOLD, `Mutating ${selected.length} promise${selected.length === 1 ? '' : 's'}`)} ${paint(DIM, `(${files.length} files per copy)`)}\n\n`);
@@ -135,9 +167,9 @@ function main() {
     try {
       copyTree(files, workspace);
       applyMutation(workspace, mutation);
-      const { status, failed } = runSuite(workspace);
+      const { status, failed, ranToCompletion } = runSuite(workspace);
 
-      const killed = status !== 0;
+      const killed = status !== 0 && ranToCompletion;
       const byIntendedTest = mutation.mustKill.filter(
         (name) => failed.some((f) => f.toLowerCase().includes(name.toLowerCase())),
       );
@@ -174,6 +206,10 @@ function main() {
   // mutation flagged as a known gap that now dies means the gap was closed and
   // the registry still says otherwise. A registry that describes a repository
   // we no longer have is worth less than no registry.
+  // A mutation that dies to tests nobody named usually broke syntax rather
+  // than behaviour, which means the promise is still unguarded and the run just
+  // looked green. The registry's own rule 2 said so and enforced nothing.
+  const wrongTest = results.filter((r) => r.killed && !r.byIntendedTest.length);
   const unguarded = results.filter((r) => !r.killed && !survivalExpected(r.mutation));
   // A mutation that dies where it was expected to survive is news, but only
   // when the expectation was unconditional. A platform list says "not here",
@@ -185,13 +221,19 @@ function main() {
   process.stdout.write(`  killed:      ${results.filter((r) => r.killed).length}\n`);
   process.stdout.write(`  known gaps:  ${knownGaps.length}${knownGaps.length ? `  (${knownGaps.map((r) => r.mutation.id).join(', ')})` : ''}\n`);
   process.stdout.write(`  unguarded:   ${unguarded.length}${unguarded.length ? `  (${unguarded.map((r) => r.mutation.id).join(', ')})` : ''}\n`);
+  process.stdout.write(`  wrong test:  ${wrongTest.length}${wrongTest.length ? `  (${wrongTest.map((r) => r.mutation.id).join(', ')})` : ''}\n`);
 
   if (staleFlags.length) {
     process.stdout.write(`\n${paint(YELLOW, 'These are now guarded — drop expectedToSurvive from the registry:')}\n`);
     for (const { mutation } of staleFlags) process.stdout.write(`  ${mutation.id}\n`);
   }
 
-  if (unguarded.length || staleFlags.length) process.exitCode = 1;
+  if (wrongTest.length) {
+    process.stdout.write(`\n${paint(YELLOW, 'These died to tests other than the ones they name — check the mutation is behavioural:')}\n`);
+    for (const { mutation } of wrongTest) process.stdout.write(`  ${mutation.id}\n`);
+  }
+
+  if (unguarded.length || staleFlags.length || wrongTest.length) process.exitCode = 1;
 }
 
 main();

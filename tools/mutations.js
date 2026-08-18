@@ -102,14 +102,20 @@ function neutraliseDisabledByMutation(text) {
     id: 'allpass-counts-any-pass',
     promise: 'A headline of "every check passed" survives no decisive failure.',
     file: 'js/findings.js',
-    find: `  const allPass = !failed.length && compauth !== 'fail' && decisivePasses >= 2;`,
-    replace: `  const allPass = Object.values(verdicts).filter((v) => v === 'pass').length >= 2;`,
+    find: `  const allPass = decisiveVerdicts.length >= 2
+    && decisiveVerdicts.every((verdict) => verdict === 'pass')
+    && compauth !== 'fail';`,
+    replace: `  const allPass = !failed.length && compauth !== 'fail' && decisiveVerdicts.length >= 2;`,
     mustKill: [
       '"every check passed" is never printed over a check that did not',
       'a composite-authentication failure also disqualifies',
     ],
-    // The original: two passes of any kind earned the headline, and arc=pass
-    // plus bimi=pass are two. 302 of 3,528 verdict combinations took it.
+    // The replacement is not the original — it is the FIRST fix, which handled
+    // only the word that had been reported. `fail` disqualified the headline
+    // and softfail, neutral, temperror, permerror, DKIM policy and DMARC none
+    // did not, so 168 combinations kept "Every check passed" over a row saying
+    // the opposite. A fix written against one example, caught by an invariant
+    // widened to the whole vocabulary.
   },
 
   {
@@ -292,6 +298,69 @@ function neutraliseDisabledByMutation(text) {
     // developer machine and never in CI, where data/ is gitignored and every
     // run is a fresh checkout. The guard was documented, correct, and had never
     // once executed in production.
+  },
+
+  {
+    id: 'controls-accused-not-named',
+    promise: 'Nothing is accused without being named.',
+    file: 'js/control.js',
+    find: `  if (!effects.length && hasControls(value)) {`,
+    replace: `  if (false && hasControls(value)) {`,
+    mustKill: ['nothing is accused without being named'],
+    // 148 codepoints made hasControls true and scanControls empty, so the card
+    // fired and the row read "It ." with no cause given.
+  },
+
+  {
+    id: 'email-swallows-the-scheme',
+    promise: 'No address-shaped prefix can hide a live URL.',
+    file: 'js/terminal.js',
+    find: `\\.[a-z]{2,24}\\b(?!:\\/\\/)/i;`,
+    replace: `\\.[a-z]{2,24}\\b/i;`,
+    mustKill: ['an address-shaped prefix cannot hide the scheme behind it'],
+  },
+
+  {
+    id: 'token-boundary-ascii-only',
+    promise: 'The payload exemption and the line wrapper agree on what a word is.',
+    file: 'js/terminal.js',
+    find: `  const SPACE = /\\s/;`,
+    replace: `  const SPACE = / /;`,
+    mustKill: ['a no-break space separates words here exactly as it does on screen'],
+  },
+
+  {
+    id: 'tls-reads-the-whole-clause',
+    promise: 'A claim about what a comment says is read from the comment.',
+    file: 'js/findings.js',
+    find: `    tlsInComment: TLS_TOKEN.test(commentsOnly(head)),`,
+    replace: `    tlsInComment: TLS_TOKEN.test(head),`,
+    mustKill: ['a TLS-shaped hostname does not make a plaintext hop encrypted'],
+    // `from` is the name the connecting client supplies, so this was a false
+    // security claim from attacker-controlled input.
+  },
+
+  {
+    id: 'tls-token-needs-a-boundary',
+    promise: 'TLS is recognised in the spellings servers actually write.',
+    file: 'js/findings.js',
+    find: `const TLS_TOKEN = /\\bTLS[v._\\d]*/i;`,
+    replace: `const TLS_TOKEN = /\\bTLS(?:v[\\d.]+)?\\b/i;`,
+    mustKill: ['a Microsoft 365 hop declaring TLS1_2 is not called plaintext'],
+    // `TLS1_2` never provides the trailing word boundary, so the guard written
+    // for Microsoft 365 hops fired on none of them.
+  },
+
+  {
+    id: 'plaintext-counted-as-hidden',
+    promise: 'An address written in the open is never called a hidden one.',
+    file: 'js/findings.js',
+    find: `        if (inTheClear.has(address)) continue;`,
+    replace: '',
+    mustKill: ['an address written in the open is never called a hidden one'],
+    // A decoder returns the whole value with one part changed, so plaintext
+    // beside an encoded token rode along and was reported as recoverable only
+    // by decoding.
   },
 
   // ------------------------------------------------- promises with no gate yet

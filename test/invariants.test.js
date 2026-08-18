@@ -44,12 +44,18 @@ test('"every check passed" is never printed over a check that did not', () => {
   const offenders = [];
 
   for (const { verdicts, header } of authCombinations()) {
-    const failed = DECISIVE.filter((m) => verdicts[m] === 'fail');
-    if (!failed.length) continue;
+    // Not just `fail`. The first version of this test asked only about the word
+    // that had been reported, so the first version of the fix only handled that
+    // word — and softfail, neutral, temperror, permerror, DKIM policy and DMARC
+    // none all kept the all-clear headline. 168 combinations, invisible to a
+    // test written against one example. A pass is a pass; everything else is
+    // something a reader is owed.
+    const notPassed = DECISIVE.filter((m) => verdicts[m] && verdicts[m] !== 'pass');
+    if (!notPassed.length) continue;
 
     const auth = analyse(parseHeaders(header)).find((f) => f.id === 'auth');
     if (auth?.title === ALL_CLEAR_TITLE) {
-      offenders.push(`${JSON.stringify(verdicts)} — ${failed.join(' and ')} failed`);
+      offenders.push(`${JSON.stringify(verdicts)} — ${notPassed.map((m) => `${m}=${verdicts[m]}`).join(', ')}`);
     }
   }
 

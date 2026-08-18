@@ -30,8 +30,13 @@ const REACHES_OUT = [
   [/\bnew\s+Image\b/, 'new Image()'],
   [/\bnew\s+EventSource\b/, 'EventSource'],
   [/\bimportScripts\b/, 'importScripts'],
-  [/\bnode:(https?|net|dns|dgram|tls)\b/, 'a Node network module'],
-  [/\brequire\(['"](https?|net|dns|dgram|tls)['"]\)/, 'a Node network require'],
+  // Listed exhaustively rather than as a stem: `https?` cannot match
+  // `node:http2`, because after `http` the \b would have to sit between `p` and
+  // `2`, and both are word characters. That one is the whole point — http2 is a
+  // network client. worker_threads and inspector are here because either can
+  // reach out on behalf of a module that cannot.
+  [/\bnode:(http|https|http2|net|dns|dgram|tls|worker_threads|inspector|cluster)\b/, 'a Node network module'],
+  [/\brequire\(['"](http|https|http2|net|dns|dgram|tls|worker_threads|inspector|cluster)['"]\)/, 'a Node network require'],
   [/\bwindow\s*\.\s*open\b/, 'window.open'],
   [/\bnavigator\s*\.\s*clipboard\b/, 'the async clipboard API'],
 ];
@@ -64,9 +69,17 @@ test('the page reaches only for its own two static assets', () => {
     }
   }
 
-  const targets = [...read('js/blocklist.js').matchAll(/fetch\('([^']+)'\)/g)].map(([, url]) => url);
-  assert.ok(targets.length > 0, 'the blocklist fetch is still there to be checked');
-  for (const target of targets) {
+  // The exemption is for two specific calls, not for a file. Counting every
+  // `fetch(` and then checking only the ones written as single-quoted literals
+  // would let a template literal or a computed URL through without the test
+  // seeing it at all — the exemption would have widened itself.
+  const blocklist = code(read('js/blocklist.js'));
+  const calls = [...blocklist.matchAll(/fetch\s*\(/g)].length;
+  const literals = [...blocklist.matchAll(/fetch\('([^']+)'\)/g)].map(([, url]) => url);
+
+  assert.equal(literals.length, calls, 'every fetch here is a plain single-quoted literal, so this test can read them all');
+  assert.equal(calls, 2, 'exactly the metadata and the filter');
+  for (const target of literals) {
     assert.doesNotMatch(target, /^[a-z]+:|^\/\//i, `${target} is not same-origin`);
     assert.match(target, /^data\//, `${target} is not one of the built assets`);
   }

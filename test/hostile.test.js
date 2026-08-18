@@ -379,3 +379,37 @@ test('what a reader legitimately sees is left exactly as it was', () => {
     assert.equal(hasControls(value), false, value);
   }
 });
+
+test('nothing is accused without being named', () => {
+  // The two halves of this module have to agree: whatever `hasControls` flags,
+  // `scanControls` must be able to describe. They came apart when the filter
+  // moved to Unicode categories and the naming patterns stayed hand-written —
+  // 148 codepoints, the soft hyphen among them, made the report announce that
+  // the header carried instructions and then describe the finding as "It ."
+  // with no cause given. A reader shown a warning with nothing behind it has
+  // been given a reason to distrust the next one.
+  const HOSTILE_ANY = /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}]/u;
+  const unnamed = [];
+
+  for (let code = 0; code <= 0x10ffff; code++) {
+    if (code >= 0xd800 && code <= 0xdfff) continue; // no lone surrogate from fromCodePoint
+    const ch = String.fromCodePoint(code);
+    if (!HOSTILE_ANY.test(ch) || ch === '\t' || ch === '\n') continue;
+    if (hasControls(ch) && scanControls(ch).length === 0) {
+      unnamed.push('U+' + code.toString(16).toUpperCase().padStart(4, '0'));
+    }
+  }
+
+  assert.deepEqual(unnamed.slice(0, 8), [], `${unnamed.length} codepoints are flagged and described by nothing`);
+});
+
+test('the precise descriptions survive the catch-all', () => {
+  // A fallback that swallowed the specific cases would be its own kind of
+  // failure: "carries control bytes" where "writes to your clipboard" belongs.
+  const cp = (n) => String.fromCodePoint(n);
+
+  assert.deepEqual(scanControls(`x${ESC}]52;c;evil`), ['writes to your clipboard']);
+  assert.deepEqual(scanControls(`a${cp(0x202e)}b`), ['reverses the direction the text is read in']);
+  assert.deepEqual(scanControls(`a${cp(0x2028)}b`), ['breaks the line where no line break was written']);
+  assert.deepEqual(scanControls('Größe — Müller ✓'), []);
+});

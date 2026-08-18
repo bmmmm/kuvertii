@@ -113,12 +113,23 @@ test('the CSP allows the page to work and nothing beyond it', () => {
   const csp = html.match(/Content-Security-Policy" content="([^"]+)"/)?.[1];
   assert.ok(csp, 'a CSP is present');
 
-  const policy = Object.fromEntries(
-    csp.split(';').map((part) => part.trim()).filter(Boolean).map((part) => {
+  // Parsed the way a user agent parses it, which is not the way
+  // Object.fromEntries does. CSP3 says a duplicate directive after the first is
+  // ignored; Object.fromEntries keeps the LAST. A policy listing
+  // `connect-src https:` and then `connect-src 'self'` would therefore have
+  // passed this check while the browser enforced the permissive half — the same
+  // hole this test was written to close, reopened by how the test reads.
+  const declared = csp.split(';').map((part) => part.trim()).filter(Boolean)
+    .map((part) => {
       const [name, ...sources] = part.split(/\s+/);
-      return [name, sources];
-    }),
-  );
+      return [name.toLowerCase(), sources];
+    });
+
+  const duplicates = declared.map(([name]) => name)
+    .filter((name, i, all) => all.indexOf(name) !== i);
+  assert.deepEqual(duplicates, [], 'a directive is declared twice, and only the first one counts');
+
+  const policy = Object.fromEntries(declared);
 
   // What each directive may contain, exhaustively. `data:` appears once, for
   // the inline SVG marks, and nowhere that could carry a request off-origin.
