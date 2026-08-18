@@ -4,7 +4,7 @@
 //   node tools/mutate.mjs            every mutation in the registry
 //   node tools/mutate.mjs csp        only those whose id contains "csp"
 //
-// The registry lives in test/mutations.js and says what each mutation is for.
+// The registry lives in tools/mutations.js and says what each mutation is for.
 // This file is only the machine: copy the tree, apply one change, run the
 // tests, and report whether anything went red.
 //
@@ -32,6 +32,17 @@ const YELLOW = '\x1b[33m';
 const DIM = '\x1b[2m';
 const OFF = '\x1b[0m';
 const colour = process.stdout.isTTY && !process.env.NO_COLOR;
+
+/**
+ * Is this mutation expected to survive here?
+ *
+ * `true` means a gap we have measured and not closed. A list of platforms means
+ * the promise cannot be broken on those systems, so no test there can go red —
+ * a different thing entirely, and reporting the two alike would let a real gate
+ * read as a hole on the platform where it works.
+ */
+const survivalExpected = (mutation) => mutation.expectedToSurvive === true
+  || (Array.isArray(mutation.expectedToSurvive) && mutation.expectedToSurvive.includes(process.platform));
 const paint = (code, text) => (colour ? `${code}${text}${OFF}` : text);
 
 /** The working tree as git sees it: tracked plus untracked, minus ignored. */
@@ -133,9 +144,10 @@ function main() {
 
       results.push({ mutation, killed, failed, byIntendedTest });
 
+      const expected = survivalExpected(mutation);
       const verdict = killed
         ? paint(GREEN, 'KILLED  ')
-        : mutation.expectedToSurvive
+        : expected
           ? paint(YELLOW, 'SURVIVED')
           : paint(RED, 'SURVIVED');
 
@@ -147,8 +159,10 @@ function main() {
         if (!byIntendedTest.length) {
           process.stdout.write(`         ${paint(YELLOW, 'but none of the tests named in mustKill — check the mutation is behavioural, not a syntax error')}\n`);
         }
-      } else if (mutation.expectedToSurvive) {
-        process.stdout.write(`         ${paint(DIM, 'known gap, recorded in the registry')}\n`);
+      } else if (expected) {
+        process.stdout.write(`         ${paint(DIM, Array.isArray(mutation.expectedToSurvive)
+          ? `not breakable on ${process.platform}, by design — see the registry`
+          : 'known gap, recorded in the registry')}\n`);
       }
       process.stdout.write('\n');
     } finally {
@@ -160,9 +174,12 @@ function main() {
   // mutation flagged as a known gap that now dies means the gap was closed and
   // the registry still says otherwise. A registry that describes a repository
   // we no longer have is worth less than no registry.
-  const unguarded = results.filter((r) => !r.killed && !r.mutation.expectedToSurvive);
-  const staleFlags = results.filter((r) => r.killed && r.mutation.expectedToSurvive);
-  const knownGaps = results.filter((r) => !r.killed && r.mutation.expectedToSurvive);
+  const unguarded = results.filter((r) => !r.killed && !survivalExpected(r.mutation));
+  // A mutation that dies where it was expected to survive is news, but only
+  // when the expectation was unconditional. A platform list says "not here",
+  // and dying on another platform is exactly what it predicts.
+  const staleFlags = results.filter((r) => r.killed && r.mutation.expectedToSurvive === true);
+  const knownGaps = results.filter((r) => !r.killed && survivalExpected(r.mutation));
 
   process.stdout.write(`${paint(BOLD, 'Summary')}\n`);
   process.stdout.write(`  killed:      ${results.filter((r) => r.killed).length}\n`);

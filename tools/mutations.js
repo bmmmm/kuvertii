@@ -35,6 +35,15 @@
 // not yet closed. It keeps the harness green while naming the hole out loud,
 // so the list of unguarded promises is a fact in the repository rather than a
 // note in somebody's head. Removing that flag is what "we fixed it" means here.
+//
+// `expectedToSurvive` may also be a list of platforms, for the case where a
+// promise cannot be broken on a given system and so cannot be tested there
+// either. That is not a gap in the gate — it is a gate whose subject does not
+// exist on that platform, and the two must not be reported as the same thing.
+// See `exit-discards-buffer` for the one instance, which CI found on its first
+// run: the mutation is lethal on darwin and inert on linux, and marking it
+// simply "expected to survive" would have quietly stopped guarding the
+// platform where the bug is real.
 
 export const MUTATIONS = [
   // ---------------------------------------------------------- the control case
@@ -96,6 +105,15 @@ function neutraliseDisabledByMutation(text) {
     find: `  (code) => { process.exitCode = code ?? 0; },`,
     replace: `  (code) => process.exit(code ?? 0),`,
     mustKill: ['a report longer than a pipe buffer arrives whole'],
+    // Node writes stdout to a pipe synchronously on Linux and Windows, and
+    // asynchronously on macOS. `process.exit` can therefore only discard a
+    // buffer on macOS — which is where the truncation was found, and where
+    // this mutation kills. On Linux there is nothing to discard, so no test
+    // can go red and the mutation survives for a reason that says nothing
+    // about the gate. Recorded rather than papered over: CI is Linux, the
+    // maintainer is on darwin, and a registry that called this a gap would
+    // have read as "unguarded" on the one platform where it is guarded.
+    expectedToSurvive: ['linux', 'win32'],
   },
 
   {
