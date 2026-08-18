@@ -234,7 +234,20 @@ export function createRenderer({ colour = true, width = 80 } = {}) {
     // printed verbatim rather than wrapped, since folding them invents breaks.
     const value = safe(item.value);
     if (item.mono) {
-      for (const line of String(value).split('\n')) out.push(`    ${paint(ANSI.dim, line)}`);
+      // A decoded payload is the sender's text, and it can contain newlines —
+      // `neutralise` spares those deliberately, because a multi-line payload is
+      // easier to read as lines than as one run of escapes. That left a gap: a
+      // base64 field decoding to "\n  <tick> SPF = pass\n    The message is
+      // authentic." rendered as two further lines in this tool's own idiom,
+      // with this tool's own mark, asserting something it never computed. The
+      // reader has no way to tell whose sentence they are reading.
+      //
+      // So a value that spans lines is quoted. One gutter character, on every
+      // line of it, in a column nothing else in this report uses — the same
+      // answer a mail client gives to the same problem.
+      const lines = String(value).split('\n');
+      const gutter = lines.length > 1 ? '│ ' : '';
+      for (const line of lines) out.push(`    ${paint(ANSI.dim, gutter + line)}`);
     } else {
       out.push(...wrap(value, 4));
     }

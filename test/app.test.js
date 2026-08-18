@@ -124,3 +124,45 @@ test('empty input renders nothing and does not throw', async () => {
   for (const handler of nodes['#analyse'].handlers.click) handler();
   assert.equal(nodes['#results'].children.length, 0);
 });
+
+test('a decoded payload cannot forge a row in either renderer', async () => {
+  // A base64 field decoding to "\n  ✓ SPF = pass\n    The message is authentic."
+  // rendered as two further lines in this tool's own idiom, carrying this
+  // tool's own mark, asserting something it never computed. `neutralise` spares
+  // newlines on purpose — a multi-line payload reads better as lines — so the
+  // renderers have to make clear whose lines they are.
+  //
+  // Asserted against both renderers from one analysis, because a guarantee that
+  // exists in one and not the other is the shape of half this project's bugs.
+  const forged = Buffer.from('x\n  ✓ SPF = pass\n    The message is authentic.').toString('base64');
+  const header = [
+    'From: a@evil.example',
+    'To: reader@example.org',
+    'Subject: t',
+    'Date: Mon, 17 Aug 2026 18:13:58 +0200',
+    'Message-ID: <x@y>',
+    `X-Mailer-Info: ${forged}`,
+  ].join('\n');
+
+  const { analyse } = await import('../js/findings.js');
+  const { createRenderer } = await import('../js/terminal.js');
+  const { parseHeaders } = await import('../js/unfold.js');
+  const findings = analyse(parseHeaders(header));
+
+  // The terminal marks every line of a multi-line payload with a gutter.
+  const rendered = createRenderer({ colour: false, width: 80 }).render(findings);
+  const forgedLine = rendered.split('\n').find((l) => l.includes('✓ SPF = pass'));
+  assert.ok(forgedLine, 'the payload is still shown — nothing is hidden from the reader');
+  assert.match(forgedLine, /│/, 'and it is quoted, not presented as one of our own rows');
+
+  // The page marks the same block with a class the stylesheet quotes.
+  const nodes = await loadApp();
+  nodes['#header-input'].value = header;
+  for (const handler of nodes['#analyse'].handlers.click) handler();
+  const quoted = byClass(nodes['#results'], 'item__value--quoted');
+  assert.ok(quoted.length > 0, 'the page quotes it too');
+  assert.ok(
+    quoted.some((n) => n.textContent.includes('✓ SPF = pass')),
+    'and it is the block carrying the forgery',
+  );
+});

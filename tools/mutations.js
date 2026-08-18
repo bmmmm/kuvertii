@@ -219,6 +219,17 @@ function neutraliseDisabledByMutation(text) {
     // boundary, no split, and the hostname pass then spared it as a payload.
   },
 
+  {
+    id: 'payload-lines-unquoted',
+    promise: 'The sender cannot write a line that reads as one of our verdicts.',
+    file: 'js/terminal.js',
+    find: `      const gutter = lines.length > 1 ? '│ ' : '';`,
+    replace: `      const gutter = '';`,
+    mustKill: ['a decoded payload cannot forge a row in either renderer'],
+    // A base64 field decoding to a tick, a verdict and a reassuring sentence
+    // rendered as further rows in this tool's own idiom. Nothing computed them.
+  },
+
   // ------------------------------------------------- promises with no gate yet
   //
   // Everything below is expected to survive today. Each one is a promise the

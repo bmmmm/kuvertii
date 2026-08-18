@@ -234,6 +234,15 @@ button.primary {
   color: var(--ink);
 }
 
+/* A payload that spans lines is the sender's own text, reproduced with their
+   line breaks. Left unmarked it can be written to look like this tool's own
+   rows — a tick, a verdict, a reassuring sentence, none of it computed here.
+   Quoted like a mail client quotes, for the same reason. */
+.item__value--quoted {
+  border-left: 2px solid var(--rule);
+  padding-left: 0.6rem;
+}
+
 /* Chips carry the short structural facts — where a value was found, how it was
    decoded, which platform issued it. Keeping them out of the prose is what lets
    a card be scanned instead of read. */

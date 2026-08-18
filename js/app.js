@@ -42,7 +42,14 @@ function renderItem(item, seenNotes) {
   if (item.level) row.classList.add(`item--${item.level}`);
 
   row.append(el('div', 'item__label', item.label));
-  const value = el('div', item.mono ? 'item__value item__value--mono' : 'item__value', item.value);
+  // Multi-line mono values are the sender's text rendered with the sender's
+  // line breaks — see the note in js/terminal.js. `white-space: pre-wrap` makes
+  // the page reproduce them just as faithfully as the terminal does, so it
+  // needs the same visible quoting.
+  const monoClass = String(item.value ?? '').includes('\n')
+    ? 'item__value item__value--mono item__value--quoted'
+    : 'item__value item__value--mono';
+  const value = el('div', item.mono ? monoClass : 'item__value', item.value);
   row.append(value);
 
   if (item.chips?.length) {
