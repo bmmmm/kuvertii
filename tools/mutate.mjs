@@ -1,0 +1,180 @@
+#!/usr/bin/env node
+// Break each promise on purpose, and check that the suite notices.
+//
+//   node tools/mutate.mjs            every mutation in the registry
+//   node tools/mutate.mjs csp        only those whose id contains "csp"
+//
+// The registry lives in test/mutations.js and says what each mutation is for.
+// This file is only the machine: copy the tree, apply one change, run the
+// tests, and report whether anything went red.
+//
+// Why a copy rather than an edit-and-revert in place: a test run that crashes,
+// or a machine that loses power halfway, must not be able to leave a sabotaged
+// working tree behind. The copy is built from `git ls-files --cached --others
+// --exclude-standard`, which is the working tree minus everything .gitignore
+// already excludes — so data/ and corpus/ never enter a mutation run, and every
+// run starts from the same shape whether or not the blocklist was built today.
+
+import { execFileSync } from 'node:child_process';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { MUTATIONS } from './mutations.js';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+const BOLD = '\x1b[1m';
+const RED = '\x1b[31m';
+const GREEN = '\x1b[32m';
+const YELLOW = '\x1b[33m';
+const DIM = '\x1b[2m';
+const OFF = '\x1b[0m';
+const colour = process.stdout.isTTY && !process.env.NO_COLOR;
+const paint = (code, text) => (colour ? `${code}${text}${OFF}` : text);
+
+/** The working tree as git sees it: tracked plus untracked, minus ignored. */
+function trackedFiles() {
+  const out = execFileSync(
+    'git',
+    ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+    { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+  );
+  return out.split('\0').filter(Boolean);
+}
+
+function copyTree(files, destination) {
+  for (const file of files) {
+    const target = join(destination, file);
+    mkdirSync(dirname(target), { recursive: true });
+    copyFileSync(join(ROOT, file), target);
+  }
+}
+
+/**
+ * Apply one mutation, or refuse.
+ *
+ * An anchor that no longer matches is the failure mode this whole harness
+ * exists to prevent one level up: the mutation would be applied to nothing, the
+ * suite would stay green for a reason that has nothing to do with the promise,
+ * and the report would be a lie in whichever direction happens to be worse.
+ * Ambiguity is refused for the same reason — two matches means we do not know
+ * which one we broke.
+ */
+function applyMutation(root, mutation) {
+  const path = join(root, mutation.file);
+  const source = readFileSync(path, 'utf8');
+  const occurrences = source.split(mutation.find).length - 1;
+
+  if (occurrences === 0) {
+    throw new Error(
+      `${mutation.id}: its anchor is no longer in ${mutation.file}. ` +
+      'The code moved and the registry did not. Fix the anchor before trusting any result here.',
+    );
+  }
+  if (occurrences > 1) {
+    throw new Error(
+      `${mutation.id}: its anchor occurs ${occurrences} times in ${mutation.file}, so it does not name one place.`,
+    );
+  }
+
+  writeFileSync(path, source.replace(mutation.find, mutation.replace));
+}
+
+/** Every test name the run reported as failing, from the TAP stream. */
+function runSuite(root) {
+  let stdout = '';
+  let status = 0;
+  try {
+    stdout = execFileSync(process.execPath, ['--test', '--test-reporter=tap'], {
+      cwd: root,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    // A red suite exits non-zero, which execFileSync reports as a throw. That
+    // is the outcome we are usually hoping for, so it is not an error here.
+    stdout = error.stdout ?? '';
+    status = error.status ?? 1;
+  }
+
+  const failed = [...stdout.matchAll(/^\s*not ok \d+ - (.+)$/gm)].map(([, name]) => name.trim());
+  return { status, failed, stdout };
+}
+
+function main() {
+  const filter = process.argv[2];
+  const selected = filter ? MUTATIONS.filter((m) => m.id.includes(filter)) : MUTATIONS;
+
+  if (!selected.length) {
+    process.stderr.write(`No mutation matches "${filter}".\n`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const files = trackedFiles();
+  const results = [];
+
+  process.stdout.write(`${paint(BOLD, `Mutating ${selected.length} promise${selected.length === 1 ? '' : 's'}`)} ${paint(DIM, `(${files.length} files per copy)`)}\n\n`);
+
+  for (const mutation of selected) {
+    const workspace = mkdtempSync(join(tmpdir(), 'kuvertii-mutate-'));
+    try {
+      copyTree(files, workspace);
+      applyMutation(workspace, mutation);
+      const { status, failed } = runSuite(workspace);
+
+      const killed = status !== 0;
+      const byIntendedTest = mutation.mustKill.filter(
+        (name) => failed.some((f) => f.toLowerCase().includes(name.toLowerCase())),
+      );
+
+      results.push({ mutation, killed, failed, byIntendedTest });
+
+      const verdict = killed
+        ? paint(GREEN, 'KILLED  ')
+        : mutation.expectedToSurvive
+          ? paint(YELLOW, 'SURVIVED')
+          : paint(RED, 'SURVIVED');
+
+      process.stdout.write(`${verdict} ${paint(BOLD, mutation.id)}\n`);
+      process.stdout.write(`         ${mutation.promise}\n`);
+
+      if (killed) {
+        process.stdout.write(`         ${paint(DIM, `${failed.length} test${failed.length === 1 ? '' : 's'} went red`)}\n`);
+        if (!byIntendedTest.length) {
+          process.stdout.write(`         ${paint(YELLOW, 'but none of the tests named in mustKill — check the mutation is behavioural, not a syntax error')}\n`);
+        }
+      } else if (mutation.expectedToSurvive) {
+        process.stdout.write(`         ${paint(DIM, 'known gap, recorded in the registry')}\n`);
+      }
+      process.stdout.write('\n');
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  }
+
+  // Three ways to fail, and the third one matters as much as the first two: a
+  // mutation flagged as a known gap that now dies means the gap was closed and
+  // the registry still says otherwise. A registry that describes a repository
+  // we no longer have is worth less than no registry.
+  const unguarded = results.filter((r) => !r.killed && !r.mutation.expectedToSurvive);
+  const staleFlags = results.filter((r) => r.killed && r.mutation.expectedToSurvive);
+  const knownGaps = results.filter((r) => !r.killed && r.mutation.expectedToSurvive);
+
+  process.stdout.write(`${paint(BOLD, 'Summary')}\n`);
+  process.stdout.write(`  killed:      ${results.filter((r) => r.killed).length}\n`);
+  process.stdout.write(`  known gaps:  ${knownGaps.length}${knownGaps.length ? `  (${knownGaps.map((r) => r.mutation.id).join(', ')})` : ''}\n`);
+  process.stdout.write(`  unguarded:   ${unguarded.length}${unguarded.length ? `  (${unguarded.map((r) => r.mutation.id).join(', ')})` : ''}\n`);
+
+  if (staleFlags.length) {
+    process.stdout.write(`\n${paint(YELLOW, 'These are now guarded — drop expectedToSurvive from the registry:')}\n`);
+    for (const { mutation } of staleFlags) process.stdout.write(`  ${mutation.id}\n`);
+  }
+
+  if (unguarded.length || staleFlags.length) process.exitCode = 1;
+}
+
+main();

@@ -41,6 +41,17 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: node --test
 
+      # A green suite says the code does what the tests describe. It does not
+      # say the tests describe anything load-bearing. This breaks each promise
+      # on purpose and fails if the suite shrugs — including when a promise
+      # recorded as a known gap has quietly become guarded, because a registry
+      # that no longer describes this repository is worth less than none.
+      #
+      # One version only: it runs the whole suite once per mutation, and
+      # nothing it asserts is version-dependent.
+      - if: matrix.node == '24'
+        run: node tools/mutate.mjs
+
   deploy:
     needs: test
     runs-on: ubuntu-latest

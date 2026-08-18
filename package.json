@@ -10,6 +10,7 @@
   },
   "scripts": {
     "test": "node --test",
+    "mutate": "node tools/mutate.mjs",
     "build:blocklist": "node tools/build-blocklist.mjs",
     "build:psl": "node tools/build-psl.mjs",
     "serve": "node tools/serve.mjs"
