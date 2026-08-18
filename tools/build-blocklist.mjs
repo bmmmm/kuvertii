@@ -50,6 +50,26 @@ const HOSTNAME_RE = /^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a
 // Public suffixes are rejected by asking the Public Suffix List rather than by
 // keeping a second hand-written list beside it. That leaves only the handful of
 // names that are ordinary registrable domains and still must not be smeared.
+//
+// This refuses more than it strictly has to, and that is the intended side of
+// the trade. The first real build rejected 98 of 391,406 entries — 0.025% —
+// and they divide into two kinds:
+//
+//   ams3.digitaloceanspaces.com   customer buckets live below it; listing it
+//   cluster013.hosting.ovh.net    would flag every tenant on that cluster
+//
+//   ec2-18-205-24-41.compute-1.amazonaws.com   nothing lives below it; the
+//                                              instance is the endpoint
+//
+// Both are public suffixes, because `*.compute-1.amazonaws.com` and
+// `*.digitaloceanspaces.com` are wildcard rules and the list declares every
+// child a boundary. Nothing distinguishes the leaf from the shared one, so the
+// choice is which error to make. README.md already states the asymmetry this
+// tool reads by: a hit is a strong warning, a miss is not an all-clear. Losing
+// a quarter of a tenth of a percent of entries is the cheaper mistake than
+// once telling somebody that every bucket in a hosting region is a phishing
+// site. The rejected names are printed on every build rather than dropped
+// quietly, so the number stays visible if it ever stops being small.
 export const NEVER_LIST = new Set([
   'google.com', 'googlemail.com', 'gmail.com', 'youtube.com',
   'microsoft.com', 'outlook.com', 'live.com', 'hotmail.com', 'office.com',
@@ -145,6 +165,10 @@ async function main() {
     bits,
     hashes,
     entries: hosts.size,
+    // Auditable from the shipped asset: how many feed lines were refused for
+    // covering more than themselves. Small and steady is expected; a jump
+    // means the feed changed shape.
+    refused: rejected.length,
     falsePositiveRate: FALSE_POSITIVE_RATE,
     builtAt: new Date().toISOString().slice(0, 10),
     // The feed is a mutable branch ref with no signature, so this cannot prove
