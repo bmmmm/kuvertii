@@ -357,9 +357,41 @@ test('skipped filtering is flagged rather than read as a pass', () => {
   assert.ok(items.every((i) => i.level !== 'good'), 'never reported as clean');
 
   const scl = items.find((i) => /Confidence Level/.test(i.label));
-  assert.equal(scl.level, 'caution');
+  assert.equal(scl.level, 'caution', 'SCL:-1 is the one score that still means something');
   assert.match(scl.value, /skipped/i);
-  assert.match(text({ items }), /before any check ran/, 'SFV:SKN explained');
+  assert.match(text({ items }), /mail flow rule/i, 'SFV:SKN named for what it is');
+});
+
+test('a category verdict outranks the score that no longer decides', () => {
+  // Microsoft's reference: on cloud mailboxes SCL "doesn't determine whether
+  // the message is identified as spam ... use the CAT and DIR values instead".
+  // This header is what a waved-through brand impersonation looks like, and it
+  // used to render as a single green "Inspected and not considered spam".
+  const headers = parseHeaders(
+    'X-Forefront-Antispam-Report: CIP:1.2.3.4;CTRY:RU;SFV:SFE;SRV:BULK;CAT:BIMP;SFTY:9.25;SCL:1;IPV:CAL\n',
+  );
+  const items = analyse(headers).find((f) => f.id === 'judgement').items;
+
+  assert.ok(items.every((i) => i.level !== 'good'), 'nothing here is a clean bill');
+  assert.equal(items.find((i) => /Confidence Level/.test(i.label)).level, null, 'SCL carries no colour');
+  assert.equal(items.find((i) => /BIMP/.test(i.label))?.level, 'bad', 'the category does');
+
+  // Both bypasses are surfaced; each used to be dropped entirely.
+  const all = text({ items });
+  assert.match(all, /Safe Senders list/);
+  assert.match(all, /IP address is on an allow list/);
+});
+
+test('a first-contact tip is not an accusation', () => {
+  // 9.25 fires on the first message from any new correspondent. 9.11, 9.21 and
+  // 9.22 are gone from Microsoft's table; 9.11 rendered bulk mail as red.
+  const items = analyse(parseHeaders('X-Forefront-Antispam-Report: SFTY:9.25;SCL:1\n'))
+    .find((f) => f.id === 'judgement').items;
+  assert.equal(items.find((i) => /Safety verdict/.test(i.label)).level, 'caution');
+
+  const stale = analyse(parseHeaders('X-Forefront-Antispam-Report: SFTY:9.11;SCL:1\n'))
+    .find((f) => f.id === 'judgement').items;
+  assert.ok(!stale.some((i) => /Safety verdict/.test(i.label)), 'a retired code states nothing');
 });
 
 test('a failing check is never described in the words of a passing one', () => {
@@ -489,10 +521,41 @@ test('a deprecated signing algorithm is called out', () => {
   assert.equal(item.level, 'caution');
 });
 
-test('a current signing algorithm passes without comment', () => {
-  const headers = parseHeaders('DKIM-Signature: a=ed25519-sha256; d=example.org; b=AAAA\n');
-  const labels = analyse(headers).find((f) => f.id === 'auth').items.map((i) => i.label);
-  assert.ok(!labels.some((l) => /Signed with/.test(l)));
+test('a current signing algorithm is never flagged as a problem', () => {
+  // The commonest current choice says nothing at all.
+  const rsa = analyse(parseHeaders('DKIM-Signature: a=rsa-sha256; d=example.org; b=AAAA\n'))
+    .find((f) => f.id === 'auth').items;
+  assert.ok(!rsa.some((i) => /Signed with/.test(i.label)));
+
+  // Ed25519 gets a sentence, but a colourless one: without it the `a=` branch
+  // only ever spoke to accuse, and a sender who did the modern thing was met
+  // with the same silence as one who did nothing.
+  const ed = analyse(parseHeaders('DKIM-Signature: a=ed25519-sha256; d=example.org; b=AAAA\n'))
+    .find((f) => f.id === 'auth').items;
+  const row = ed.find((i) => /Signed with/.test(i.label));
+  assert.match(row.label, /ed25519/);
+  assert.equal(row.level, undefined, 'RFC 8463 is current, not a fault');
+});
+
+test('an expired signature is reported against the arrival time', () => {
+  // DKIM replay: one correctly signed message re-sent to thousands of others,
+  // where the signature keeps verifying because it covers nothing about who it
+  // was addressed to. `x=` is the answer to that, and was parsed for nothing.
+  const expired = analyse(parseHeaders([
+    'DKIM-Signature: a=rsa-sha256; d=example.org; s=k1; t=1767225600; x=1767229200; b=AAAA',
+    'Received: from a.example by b.example; Wed, 15 Jul 2026 12:00:00 +0000',
+  ].join('\n'))).find((f) => f.id === 'auth').items;
+
+  const row = expired.find((i) => /expir/i.test(i.label));
+  assert.equal(row.level, 'caution');
+  assert.match(row.note, /no signature at all/);
+
+  // The same signature, arriving inside its window, is not a complaint.
+  const fresh = analyse(parseHeaders([
+    'DKIM-Signature: a=rsa-sha256; d=example.org; s=k1; t=1767225600; x=1767229200; b=AAAA',
+    'Received: from a.example by b.example; Thu, 1 Jan 2026 00:30:00 +0000',
+  ].join('\n'))).find((f) => f.id === 'auth').items;
+  assert.equal(fresh.find((i) => /expiry/i.test(i.label))?.level, null);
 });
 
 test('a self-declared urgency is reported as a claim, not a verdict', () => {
@@ -519,4 +582,138 @@ test('a minimal header produces only what it can support', () => {
 
   const recipients = findings.find((f) => f.id === 'recipients');
   assert.equal(recipients.tone, 'info', 'nothing hidden, so no alarm');
+});
+
+// ------------------------------------------------ what the receiver decided
+
+const auth = (...lines) => {
+  const finding = analyse(parseHeaders(`${lines.join('\n')}\n`)).find((f) => f.id === 'auth');
+  return { items: finding.items, all: text(finding), lede: finding.lede };
+};
+
+test('the published policy is read from the DMARC result, not from the whole line', () => {
+  // `=` is legal in a local part, and Gmail-class receivers echo the envelope
+  // sender verbatim into the SPF parenthetical — which comes first. Scraping
+  // /p=(\w+)/ over the whole string let the sender write this row.
+  const { all } = auth(
+    'Authentication-Results: spf=fail (sender IP is 1.2.3.4)'
+    + ' smtp.mailfrom=p=reject@evil.example; dmarc=fail (p=NONE sp=NONE dis=NONE)'
+    + ' header.from=victim.example',
+  );
+  assert.match(all, /Published DMARC policy/);
+  assert.doesNotMatch(all, /policy.*reject/is, 'the envelope sender cannot dictate the policy row');
+});
+
+test('a policy in test mode is not a policy', () => {
+  // RFC 9989 §5.5.1 replaced pct= with t=. A domain can advertise p=reject and
+  // ask in the same breath that nothing be rejected.
+  const { all } = auth('Authentication-Results: mx.example; dmarc=fail (p=reject t=y) header.from=a.example');
+  assert.match(all, /test mode/i);
+  assert.match(all, /protects nothing/);
+});
+
+test('what the receiver did is separated from what the domain asked for', () => {
+  const { all } = auth('Authentication-Results: mx.example; dmarc=fail action=oreject header.from=a.example');
+  assert.match(all, /What this receiver did/);
+  assert.match(all, /overrode it, delivering anyway/);
+});
+
+test('composite authentication is read, and its reason code explained', () => {
+  // The largest receiver kuvertii meets records its identity decision here, and
+  // the mechanism scanner structurally cannot see it.
+  const { items, all } = auth(
+    'Authentication-Results: spf=fail; dkim=none; dmarc=fail; compauth=fail reason=010',
+  );
+  assert.equal(items.find((i) => /Composite authentication/.test(i.label)).level, 'bad');
+  assert.match(all, /Reason 010/);
+  assert.match(all, /self-to-self spoofing|inside/i);
+});
+
+test('an unlisted reason code still says something, from its leading digit', () => {
+  const { all } = auth('Authentication-Results: mx.example; compauth=pass reason=104');
+  assert.match(all, /Reason 104/);
+});
+
+test('ARC is not called noise while it is explaining the failure', () => {
+  const failing = auth('Authentication-Results: mx.example; spf=fail; dmarc=fail; arc=pass');
+  const arc = failing.items.find((i) => /^ARC/.test(i.label));
+  assert.doesNotMatch(arc.note, /Informational/);
+  assert.match(arc.note, /forwarder/i);
+
+  // With no DMARC failure to explain, it goes back to being informational.
+  const passing = auth('Authentication-Results: mx.example; spf=pass; dmarc=pass; arc=pass');
+  assert.match(passing.items.find((i) => /^ARC/.test(i.label)).note, /Informational/);
+});
+
+test('a fabricated one-click header buys no endorsement', () => {
+  // RFC 8058 §3 defines exactly one value. A substring test accepted anything.
+  const fake = analyse(parseHeaders([
+    'From: a@b.example',
+    'List-Unsubscribe: <https://evil.example/login>',
+    'List-Unsubscribe-Post: definitely-not-one-click',
+  ].join('\n')));
+  assert.doesNotMatch(JSON.stringify(fake), /8058/);
+
+  const real = analyse(parseHeaders([
+    'From: a@b.example',
+    'List-Unsubscribe: <https://b.example/unsubscribe>',
+    'List-Unsubscribe-Post: List-Unsubscribe=One-Click',
+  ].join('\n')));
+  assert.match(JSON.stringify(real), /8058/);
+});
+
+test('the one-click claim does not promise privacy it cannot deliver', () => {
+  // RFC 8058 §3.1: the POST goes to the same address as the link, so the
+  // per-recipient id travels either way. What it drops is the context.
+  const real = JSON.stringify(analyse(parseHeaders([
+    'From: a@b.example',
+    'List-Unsubscribe: <https://b.example/unsubscribe>',
+    'List-Unsubscribe-Post: List-Unsubscribe=One-Click',
+  ].join('\n'))));
+  assert.doesNotMatch(real, /skips the click tracker/);
+  assert.match(real, /same address/);
+});
+
+test('a sender asking for unencrypted delivery is reported', () => {
+  // RFC 8689. Its whole function is to ask relays to ignore the recipient's own
+  // MTA-STS and DANE policy.
+  const finding = analyse(parseHeaders('From: a@b.example\nTLS-Required: No\n'))
+    .find((f) => f.id === 'origin');
+  const row = text(finding);
+  assert.match(row, /travel unencrypted/i);
+  assert.match(row, /8689/);
+
+  // Any other value, including the header's absence, says nothing.
+  const quiet = analyse(parseHeaders('From: a@b.example\nTLS-Required: Yes\n'))
+    .find((f) => f.id === 'origin');
+  assert.ok(!quiet || !/travel unencrypted/i.test(text(quiet)));
+});
+
+test('a hop says whether it was encrypted, not merely which verb it used', () => {
+  const finding = analyse(parseHeaders([
+    'From: a@b.example',
+    'Received: from a.example by b.example with ESMTPS; Mon, 1 Jan 2026 00:00:02 +0000',
+    'Received: from c.example by a.example with ESMTPA; Mon, 1 Jan 2026 00:00:00 +0000',
+  ].join('\n'))).find((f) => f.id === 'route');
+
+  const all = text(finding);
+  assert.match(all, /encrypted hop/);
+  // ESMTPA is authenticated, not encrypted — the `S` is the one that means TLS.
+  assert.match(all, /unencrypted hop/);
+});
+
+test('a message signed only under the DKIM2 draft is not met with silence', () => {
+  // draft-ietf-dkim-dkim2-spec is an active Internet-Draft with no RFC. The
+  // card used to return null unless one of the three classic inputs was
+  // present, so such a message produced no authentication section at all.
+  const finding = analyse(parseHeaders([
+    'From: a@b.example',
+    'DKIM2-Signature: i=1; d=b.example; s=k1; b=AAAA',
+    'Message-Instance: i=1; h=abc',
+  ].join('\n'))).find((f) => f.id === 'auth');
+
+  assert.ok(finding, 'the card exists');
+  const row = finding.items.find((i) => /DKIM2/.test(i.label));
+  assert.equal(row.level, undefined, 'a draft is not a verdict');
+  assert.match(row.note, /no published RFC/);
 });

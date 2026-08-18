@@ -8,7 +8,7 @@ import { hasControls, scanControls } from './control.js';
 import { table } from './lookup.js';
 import { bestDecode, clip, decodeIdentifier, decodeSegments, findAddresses, prettifyNulls } from './decode.js';
 import { extractUrls, inspectUnsubscribeLink, registrableDomain } from './links.js';
-import { microsoftVerdicts } from './microsoft.js';
+import { filedAsUnwanted, microsoftVerdicts } from './microsoft.js';
 import { identifyPlatformHeader, identifySender } from './senders.js';
 import { get, getAll } from './unfold.js';
 
@@ -728,7 +728,12 @@ function unsubscribeFinding(headers) {
   if (!raw) return null;
 
   const fromDomain = (findAddresses(get(headers, 'from'))[0] ?? '').split('@')[1] ?? '';
-  const hasOneClick = /one-click/i.test(get(headers, 'list-unsubscribe-post'));
+  // RFC 8058 §3 defines exactly one value for this header. A substring test
+  // accepted anything containing the words, so `List-Unsubscribe-Post:
+  // definitely-not-one-click` bought the full green endorsement — a phish could
+  // manufacture the reassurance with one fabricated header.
+  const hasOneClick = /^\s*List-Unsubscribe\s*=\s*One-Click\s*$/i
+    .test(get(headers, 'list-unsubscribe-post'));
   const items = [];
   const hosts = new Set();
 
@@ -755,7 +760,7 @@ function unsubscribeFinding(headers) {
     title: 'Where the unsubscribe link really goes',
     tone: items.some((i) => i.level === 'bad') ? 'alert' : 'info',
     lede: hasOneClick
-      ? 'This sender supports one-click unsubscribe (RFC 8058). Prefer your mail client\'s own unsubscribe button over the link in the message body — it skips the click tracker.'
+      ? 'This sender supports one-click unsubscribe (RFC 8058). Prefer your mail client\'s own unsubscribe button over the link in the message body: it posts to the same address, so the sender still learns you acted, but it carries no cookies, no login and no browser fingerprint, and it never opens the page.'
       : 'Checked by taking the link apart, not by visiting it. Nothing was sent anywhere.',
     items,
     // Resolved asynchronously against the offline blocklist once the page has it.
@@ -830,6 +835,21 @@ const URGENCY_FIELDS = [
 function originFinding(headers) {
   const items = [];
 
+  // RFC 8689. A sender-set header whose only function is to ask every relay on
+  // the route to deliver without encryption, and to disregard the recipient's
+  // own MTA-STS and DANE policy while doing so. It belongs on this card because
+  // it is the same category as everything else here: something the sending side
+  // chose to say about itself.
+  if (/^\s*no\b/i.test(get(headers, 'tls-required'))) {
+    items.push({
+      label: 'The sender asked for this to travel unencrypted',
+      value: 'TLS-Required: No instructs every relay along the way to deliver even if it cannot negotiate TLS, and to ignore any policy you publish saying otherwise.',
+      note: 'RFC 8689 added this for senders whose mail is worth less than the risk of it bouncing. On a message about an account or a payment, it is worth asking why.',
+      level: 'caution',
+      emphasis: true,
+    });
+  }
+
   for (const [field, label] of CLIENT_IP_FIELDS) {
     for (const value of getAll(headers, field)) {
       // Providers bracket the address: `X-Originating-IP: [203.0.113.5]`.
@@ -902,11 +922,93 @@ function originFinding(headers) {
 
 // -------------------------------------------------------------------- auth
 
+/**
+ * The `dmarc=…` portion of an Authentication-Results string.
+ *
+ * Runs to the next unparenthesised semicolon, because every receiver worth
+ * reading puts its policy detail inside parentheses — Google's
+ * `dmarc=fail (p=NONE sp=NONE dis=NONE)` carries a semicolon-free parenthetical
+ * but the ones that do not are why the depth is tracked.
+ */
+/**
+ * Timestamps from the Received chain, newest first.
+ *
+ * `Received` is prepended by each hop, so the first one is the last machine to
+ * touch the message — the closest thing the header has to "when this arrived".
+ * Preferred over `Date:`, which the sender writes and can set to anything.
+ */
+function receivedDates(headers) {
+  return getAll(headers, 'received')
+    .map((value) => new Date(value.slice(value.lastIndexOf(';') + 1).trim()))
+    .filter((date) => !Number.isNaN(date.getTime()));
+}
+
+function dmarcSpan(results) {
+  const start = results.search(/\bdmarc=/i);
+  if (start === -1) return '';
+  let depth = 0;
+  for (let i = start; i < results.length; i++) {
+    const char = results[i];
+    if (char === '(') depth += 1;
+    else if (char === ')') depth -= 1;
+    else if (char === ';' && depth <= 0) return results.slice(start, i);
+  }
+  return results.slice(start);
+}
+
+// What the receiver did, as distinct from what the domain asked for.
+// `pct.quarantine` and `pct.reject` are Microsoft's, and outlive the tag they
+// are named after: RFC 9989 removed `pct=` (Appendix A.6), Microsoft still
+// stamps these.
+const DMARC_DISPOSITION = table({
+  none: 'Delivered, with no DMARC action taken.',
+  quarantine: 'Set aside — junk folder or quarantine — because the message failed the domain\'s policy.',
+  reject: 'Refused outright at the door.',
+  oreject: 'The domain asked for rejection and this receiver overrode it, delivering anyway.',
+  'pct.quarantine': 'The domain asked for quarantine on a fraction of failures, and this message fell outside that fraction, so it was delivered. Microsoft still reports this although RFC 9989 removed the pct tag.',
+  'pct.reject': 'The domain asked for rejection on a fraction of failures, and this message fell outside that fraction, so it was delivered. Microsoft still reports this although RFC 9989 removed the pct tag.',
+  permerror: 'No action: the domain\'s own DMARC record could not be read.',
+  temperror: 'No action: a lookup failed while the check was running.',
+});
+
+// Microsoft's composite authentication reason codes, which record the identity
+// decision an M365 tenant actually made. Not in any RFC — this is the largest
+// receiver's own vocabulary, and on its mail it says more than dmarc= does.
+const COMPAUTH_REASONS = table({
+  '000': ['The message failed authentication outright, and the domain asked for such mail to be quarantined or rejected.', 'bad'],
+  '001': ['The message failed authentication, and the sending domain publishes nothing strong enough to say what should happen — no records, or a policy of p=none.', 'caution'],
+  '002': ['An administrator here has explicitly forbidden this sender and domain from sending on its behalf.', 'bad'],
+  '010': ['The message failed DMARC while claiming to come from this organisation\'s own domain. That is self-to-self spoofing — someone outside writing as though they were a colleague.', 'bad'],
+  '109': ['The sending domain publishes no DMARC record, but the message would have passed if it did.', null],
+  '111': ['DMARC could not be evaluated, and SPF or DKIM aligned with the From domain anyway.', null],
+  '112': ['A DNS timeout stopped the DMARC record from being fetched.', 'caution'],
+  '130': ['A forwarder this organisation trusts sealed the message, and that seal overrode the DMARC failure.', null],
+  '501': ['A genuine bounce message between correspondents who have written to each other before, so DMARC was not enforced.', null],
+  '502': ['A genuine bounce for a message sent from this organisation, so DMARC was not enforced.', null],
+  '601': ['The sending domain belongs to this organisation — self-to-self, and it did not authenticate.', 'bad'],
+  '905': ['DMARC was not enforced because the mail took a complicated route, such as through an on-premises server before reaching Microsoft.', 'caution'],
+});
+
+// The leading digit classifies anything the table above does not name.
+const COMPAUTH_CLASSES = table({
+  1: ['The message authenticated.', null],
+  2: ['The message partly authenticated.', null],
+  3: ['Composite authentication was not run on this message.', null],
+  4: ['The message bypassed composite authentication.', 'caution'],
+  6: ['The message failed implicit authentication.', 'caution'],
+  7: ['DMARC was not enforced, because this organisation has a history of legitimate mail from this infrastructure.', null],
+  9: ['The message bypassed composite authentication.', 'caution'],
+});
+
 function authFinding(headers) {
   const results = getAll(headers, 'authentication-results').join('\n');
   const receivedSpf = get(headers, 'received-spf');
   const dkimSignature = get(headers, 'dkim-signature');
-  if (!results && !receivedSpf && !dkimSignature) return null;
+  const dkim2 = get(headers, 'dkim2-signature') || get(headers, 'message-instance');
+  // Without this, a message signed only under the DKIM2 draft produces no
+  // authentication card at all — the reader is told nothing rather than told
+  // that something unfamiliar is here.
+  if (!results && !receivedSpf && !dkimSignature && !dkim2) return null;
 
   const items = [];
   const verdicts = {};
@@ -978,6 +1080,11 @@ function authFinding(headers) {
   // Only SPF, DKIM and DMARC carry weight. BIMI and ARC are absent or failing
   // on most legitimate mail, so colouring them red would cry wolf.
   const DECISIVE = new Set(['spf', 'dkim', 'dmarc']);
+
+  // Forwarding is the commonest innocent cause of a DMARC failure, and when a
+  // forwarder sealed the message the header says so directly.
+  const arcExplainsDmarc = verdicts.dmarc === 'fail' && verdicts.arc === 'pass';
+
   for (const [mechanism, verdict] of Object.entries(verdicts)) {
     const wording = explain[mechanism] ?? {};
     items.push({
@@ -991,16 +1098,90 @@ function authFinding(headers) {
         : verdict === 'none' ? 'absent'
           : (DECISIVE.has(mechanism) && verdict === 'fail') ? 'bad'
             : null,
-      note: DECISIVE.has(mechanism) ? null : 'Informational — commonly absent even on legitimate mail.',
+      note: DECISIVE.has(mechanism) ? null
+        // ARC stays out of DECISIVE — a seal is worth whatever the receiver's
+        // trust list says it is — but calling it noise while it is sitting
+        // there explaining the DMARC failure beside it is simply wrong.
+        : (mechanism === 'arc' && arcExplainsDmarc)
+          ? 'This is the likeliest reason DMARC failed. A forwarder altered the message and recorded how it looked beforehand; whether that record counts is the receiving side\'s decision, not the sender\'s.'
+          : 'Informational — commonly absent even on legitimate mail.',
     });
   }
 
-  const dmarcPolicy = get(headers, 'x-dmarc-policy') || results.match(/p=(\w+)/)?.[0];
-  if (dmarcPolicy) {
+  // Scoped to the dmarc= result, not scraped from the whole string. `=` is
+  // legal in a local part, so an envelope sender of `p=reject@evil.example` —
+  // which Gmail-class receivers echo verbatim into the SPF parenthetical, and
+  // the SPF result comes first — used to make this row read `p=reject` on a
+  // message whose own header said `(p=NONE)`.
+  const dmarc = dmarcSpan(results);
+  const policy = get(headers, 'x-dmarc-policy') || dmarc.match(/\bp=(none|quarantine|reject)\b/i)?.[1];
+  if (policy) {
+    const tag = (name) => dmarc.match(new RegExp(`\\b${name}=([A-Za-z]+)\\b`, 'i'))?.[1];
+    const subdomain = tag('sp');
+    const nonExistent = tag('np');
+    const testing = tag('t');
+
+    const extra = [
+      subdomain ? `Subdomains: ${subdomain}.` : '',
+      nonExistent ? `Subdomains that do not exist: ${nonExistent}.` : '',
+    ].filter(Boolean).join(' ');
+
     items.push({
       label: 'Published DMARC policy',
-      value: dmarcPolicy,
-      note: 'What the domain owner asks receivers to do with messages that fail.',
+      value: `${policy}${extra ? `. ${extra}` : '.'}`,
+      note: 'What the domain owner asks receivers to do with mail that fails. It binds nobody — each receiver decides for itself.',
+    });
+
+    // RFC 9989 §5.5.1: `t=y` means the policy is published for observation and
+    // is not to be applied. A domain can therefore advertise `p=reject` and ask
+    // that nothing be rejected, which is worth more than the policy word.
+    if (testing?.toLowerCase() === 'y') {
+      items.push({
+        label: 'The policy is in test mode',
+        value: `The domain publishes p=${policy} and sets t=y beside it, which asks receivers to observe the outcome and act as though the policy were "none".`,
+        note: 'RFC 9989 replaced the old pct= tag with this. A policy in test mode protects nothing.',
+        level: 'caution',
+      });
+    }
+  }
+
+  // Microsoft's composite verdict. Structurally invisible to the mechanism
+  // scanner above, which only knows the five RFC names — and on M365 mail this
+  // is the field recording what the receiver concluded about the sender's
+  // identity, after weighing SPF, DKIM, DMARC and the message together.
+  const compauth = results.match(/\bcompauth=(\w+)/i)?.[1]?.toLowerCase();
+  if (compauth) {
+    items.push({
+      label: `Composite authentication = ${compauth}`,
+      value: compauth === 'pass'
+        ? 'Microsoft weighed SPF, DKIM, DMARC and the message together and accepted the sender\'s identity.'
+        : compauth === 'fail'
+          ? 'Microsoft weighed everything together and did not accept that this message is from who it says.'
+          : 'Microsoft did not reach a composite verdict on this sender.',
+      level: compauth === 'pass' ? 'good' : compauth === 'fail' ? 'bad' : null,
+      note: 'Microsoft\'s own judgement rather than any RFC\'s. On mail through Microsoft 365 it is the verdict that decided delivery.',
+    });
+
+    const code = results.match(/\breason=(\d{3})/i)?.[1];
+    const known = code && (COMPAUTH_REASONS[code] ?? COMPAUTH_CLASSES[code[0]]);
+    if (known) {
+      items.push({
+        label: `Reason ${code}`,
+        value: known[0],
+        level: known[1],
+        emphasis: known[1] === 'bad',
+      });
+    }
+  }
+
+  // What the receiver actually did, which is the part the reader wants and the
+  // only part that was not a request. Google writes `dis=`, Microsoft `action=`.
+  const applied = dmarc.match(/\b(?:dis|action)=([A-Za-z.]+)/i)?.[1];
+  if (applied) {
+    items.push({
+      label: 'What this receiver did about it',
+      value: DMARC_DISPOSITION[applied.toLowerCase()] ?? `Recorded as "${applied}".`,
+      note: 'The published policy is a request; this is the decision. They differ more often than not.',
     });
   }
 
@@ -1051,6 +1232,33 @@ function authFinding(headers) {
     });
   }
 
+  // An expiry is the industry's main answer to DKIM replay — a spammer taking
+  // one correctly signed message and re-sending it to thousands of other
+  // recipients, where the signature keeps verifying because it covers nothing
+  // about who it was sent to.
+  const expiry = dkimSignature.match(/\bx=(\d{9,})/)?.[1];
+  if (expiry) {
+    const expiresAt = new Date(Number(expiry) * 1000);
+    const newestHop = receivedDates(headers)[0];
+    const stale = newestHop && expiresAt < newestHop;
+    items.push({
+      label: stale ? 'The signature had expired before this message arrived' : 'The signature carries an expiry',
+      value: `Valid until ${expiresAt.toISOString().replace('T', ' ').replace(/\..+/, ' UTC')}.`,
+      note: stale
+        ? 'An expired signature verifies as no signature at all, so whatever DKIM appeared to vouch for here, it no longer does.'
+        : 'A short window limits how long a correctly signed copy can be replayed to other recipients.',
+      level: stale ? 'caution' : null,
+    });
+  }
+
+  if (dkim2) {
+    items.push({
+      label: 'Signed under the DKIM2 draft',
+      value: 'This message carries DKIM2-Signature or Message-Instance fields, which record each modification a forwarder made rather than breaking when one is made.',
+      note: 'draft-ietf-dkim-dkim2-spec, an active Internet-Draft with no published RFC. Nothing here verifies it, and few receivers evaluate it yet.',
+    });
+  }
+
   const algorithm = dkimSignature.match(/\ba=([\w-]+)/)?.[1]?.toLowerCase();
   if (algorithm && /sha1$/.test(algorithm)) {
     items.push({
@@ -1058,6 +1266,14 @@ function authFinding(headers) {
       value: 'SHA-1 has been prohibited for DKIM since RFC 8301 in 2018, because collisions are practical.',
       note: 'Most receivers now treat such a signature as no signature at all.',
       level: 'caution',
+    });
+  } else if (algorithm === 'ed25519-sha256') {
+    // Without this the `a=` branch only ever speaks to accuse, and a sender who
+    // did the modern thing gets the same silence as one who did nothing.
+    items.push({
+      label: 'Signed with ed25519-sha256',
+      value: 'The elliptic-curve signature type from RFC 8463. Shorter keys than RSA at the same strength, which is why it fits in DNS without splitting the record.',
+      note: 'Still uncommon; senders usually publish an RSA signature beside it for receivers that do not implement it.',
     });
   }
 
@@ -1121,6 +1337,11 @@ function routeFinding(headers) {
       ].filter(Boolean).join('  '),
       chips: [
         hop.date,
+        // The `S` immediately after SMTP is the one that means TLS (RFC 3848):
+        // `ESMTPS` and `ESMTPSA` are encrypted, `ESMTPA` is only authenticated,
+        // and `ESMTP` is neither. The chip carried the word and never said
+        // which — so the one fact a reader can get out of it went unstated.
+        hop.protocol ? (/^(?:e?smtps|https)/i.test(hop.protocol) ? 'encrypted hop' : 'unencrypted hop') : null,
         platform ? `${platform.name} — bulk mail platform` : null,
         encodedName ? `decodes to ${encodedName}` : null,
       ].filter(Boolean),
@@ -1178,11 +1399,11 @@ function wasFiledAsSpam(headers) {
   if (/junk|spam/i.test(get(headers, 'x-apple-movetofolder'))) return true;
   if (/^yes\b/i.test(get(headers, 'x-suspected-spam'))) return true;
 
-  const scl = Number(
-    get(headers, 'x-forefront-antispam-report').match(/\bSCL:(-?\d+)/i)?.[1]
-    ?? get(headers, 'x-ms-exchange-organization-scl'),
-  );
-  return Number.isFinite(scl) && scl >= 5;
+  // The threat category rather than the SCL score. Microsoft's reference states
+  // that on cloud mailboxes SCL "doesn't determine whether the message is
+  // identified as spam", and a `CAT:BIMP` message routinely carries `SCL:1` —
+  // so the old `scl >= 5` test read a brand-impersonation verdict as clean.
+  return filedAsUnwanted(headers);
 }
 
 // --------------------------------------------------------------- judgements

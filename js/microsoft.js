@@ -4,6 +4,7 @@
 // instead of inside findings.js: the header names and codes are Microsoft's,
 // and the only work done here is translating them into sentences.
 
+import { emptyTable, table } from './lookup.js';
 import { get } from './unfold.js';
 
 // Field meanings follow Microsoft's published reference for anti-spam message
@@ -15,36 +16,72 @@ import { get } from './unfold.js';
 // also "filtering was skipped", which is what a mail flow rule looks like from
 // the inside — and which is how a hostile message gets waved through.
 
-import { emptyTable, table } from './lookup.js';
-
+// The threat category (CAT) and filter verdict (SFV) vocabularies. Two
+// namespaces in one lookup: the codes do not collide, and every one of them
+// answers the same question — what did the filter decide.
+//
+// The entries that matter most are the ones saying filtering did not happen.
+// SFE, SKA, SKI, SKN and IPV:CAL each mean a message reached the inbox because
+// something waved it through before any check ran. That is what a mail flow
+// rule, an over-broad allow list, or a user's own safe-senders entry looks like
+// from the inside, and it is the case this module exists to surface.
 const SPAM_VERDICTS = table({
-  SPM: ['The filter classified this message as spam.', 'bad'],
-  HSPM: ['The filter classified this message as spam, with high confidence.', 'bad'],
-  BLK: ['The sender was on a block list.', 'bad'],
-  PHSH: ['The filter classified this message as phishing.', 'bad'],
-  HPHSH: ['The filter classified this message as phishing, with high confidence.', 'bad'],
-  HPHISH: ['The filter classified this message as phishing, with high confidence.', 'bad'],
-  MALW: ['The message carried malware.', 'bad'],
-  SPOOF: ['The sender address appeared to be forged.', 'bad'],
-  DIMP: ['The message imitated a domain the recipient deals with.', 'bad'],
-  UIMP: ['The message imitated a person the recipient deals with.', 'bad'],
-  GIMP: ['Mailbox intelligence flagged the sender as unusual for this recipient.', 'caution'],
+  // Threat categories (CAT).
+  AMP: ['Anti-malware caught something in this message.', 'bad'],
+  BIMP: ['The message impersonated a brand.', 'bad'],
   BULK: ['Classified as bulk mail rather than spam.', null],
-  NSPM: ['Not classified as spam.', null],
-  SKA: ['Filtering was skipped because an allow list matched.', 'caution'],
-  SKN: ['Filtering was skipped — a mail flow rule marked this safe before any check ran.', 'caution'],
-  SKS: ['A mail flow rule marked this as spam before any check ran.', 'caution'],
-  SKB: ['A block list matched.', 'bad'],
+  DIMP: ['The message imitated a domain the recipient deals with.', 'bad'],
+  FTBP: ['The message carried an attachment of a type the organisation blocks outright.', 'bad'],
+  GIMP: ['Mailbox intelligence flagged the sender as unusual for this recipient.', 'caution'],
+  HPHISH: ['The filter classified this message as phishing, with high confidence.', 'bad'],
+  HPHSH: ['The filter classified this message as phishing, with high confidence.', 'bad'],
+  HSPM: ['The filter classified this message as spam, with high confidence.', 'bad'],
+  INTOS: ['Phishing that claimed to come from inside the recipient’s own organisation.', 'bad'],
+  MALW: ['The message carried malware.', 'bad'],
+  OSPM: ['Outbound spam — recorded as sent from this organisation rather than to it.', 'bad'],
+  PHSH: ['The filter classified this message as phishing.', 'bad'],
+  SAP: ['Safe Attachments opened something in this message and did not like what it did.', 'bad'],
+  SPM: ['The filter classified this message as spam.', 'bad'],
+  SPOOF: ['The sender address appeared to be forged.', 'bad'],
+  UIMP: ['The message imitated a person the recipient deals with.', 'bad'],
+
+  // Filter verdicts (SFV).
+  BLK: ['Filtering was skipped and the message blocked: the sender is on the recipient’s own blocked list.', 'caution'],
+  NSPM: ['Inspected by the spam filter and not classified as spam.', null],
+  SFE: ['Filtering was skipped because the sender is on the recipient’s own Safe Senders list. No check ran on this message.', 'caution'],
+  SKA: ['Filtering was skipped because an allow-list entry in the anti-spam policy matched, so this reached the inbox unchecked.', 'caution'],
+  SKB: ['Marked as spam by a block-list entry in the anti-spam policy.', 'caution'],
+  SKI: ['Filtering was skipped because the connecting IP is on the allow list in the connection filter policy.', 'caution'],
+  SKN: ['Filtering was bypassed by a mail flow rule — someone configured mail of this kind to skip inspection.', 'caution'],
   SKQ: ['Someone released this message from quarantine.', 'caution'],
-  SKI: ['Filtering was skipped.', 'caution'],
+  SKS: ['Marked as spam before filtering ran, by a mail flow rule or by an on-premises verdict.', 'caution'],
 });
 
+// Three values exist today. 9.11, 9.21 and 9.22 were carried here from an older
+// revision of Microsoft's table and are absent from the current one; 9.11 in
+// particular rendered ordinary bulk mail as an emphasised red phishing verdict.
+//
+// 9.25 is not an accusation. Microsoft's own wording is that it "might be an
+// indication of a suspicious or phishing message" — it fires on the first
+// message from any new correspondent, which is most of them.
 const IMPERSONATION_SAFETY = table({
-  '9.19': 'domain impersonation — the sending domain resembles one the organisation deals with',
-  '9.20': 'user impersonation — the display name resembles someone the recipient knows',
-  '9.11': 'bulk mail',
-  '9.21': 'the message claimed to come from inside the organisation',
-  '9.22': 'the message claimed to come from a domain that did not authorise it',
+  '9.19': ['domain impersonation — the sending domain resembles one the organisation protects', 'bad'],
+  '9.20': ['user impersonation — the sender resembles someone in the recipient’s organisation', 'bad'],
+  '9.25': ['first contact — nobody here has corresponded with this sender before', 'caution'],
+});
+
+// Recorded when a decision was made somewhere other than the filter.
+const IP_VERDICT = table({
+  CAL: ['Filtering was skipped because the connecting IP address is on an allow list.', 'caution'],
+});
+
+// Direction. `INB` on a message you received is the ordinary case and says
+// nothing worth a row. `INT` means Microsoft treated the message as internal to
+// the organisation, which on something that arrived from outside is the shape
+// of a successful self-to-self spoof rather than a fact about the sender.
+const DIRECTION = table({
+  OUT: ['Recorded as leaving the organisation rather than arriving.', 'caution'],
+  INT: ['Treated as internal mail. On a message that reached you from outside, that is what a successful self-to-self spoof looks like.', 'caution'],
 });
 
 /** Split `KEY:VALUE;KEY:VALUE;` into a lookup, uppercasing the keys. */
@@ -58,6 +95,21 @@ function parseReport(value) {
   return fields;
 }
 
+/**
+ * Did Microsoft's filter actually classify this message as unwanted?
+ *
+ * The category, not the score. `SCL` used to answer this and no longer can:
+ * Microsoft's reference states that in cloud organisations the value "doesn't
+ * determine whether the message is identified as spam or the action taken on
+ * it" and directs readers to `CAT` and `DIR` instead. A message can carry
+ * `CAT:BIMP` — brand impersonation — beside `SCL:1`.
+ */
+export function filedAsUnwanted(headers) {
+  const forefront = parseReport(get(headers, 'x-forefront-antispam-report'));
+  const category = forefront.CAT?.toUpperCase();
+  return Boolean(category && SPAM_VERDICTS[category]?.[1] === 'bad');
+}
+
 /** Verdict items from the Microsoft 365 anti-spam headers, or [] when absent. */
 export function microsoftVerdicts(headers) {
   const forefront = parseReport(get(headers, 'x-forefront-antispam-report'));
@@ -69,15 +121,18 @@ export function microsoftVerdicts(headers) {
     const n = Number(scl);
     const meaning =
       n === -1 ? 'Filtering was skipped entirely, so this score reflects a rule rather than an inspection.'
-        : n <= 1 ? 'Inspected and not considered spam.'
-          : n <= 4 ? 'Inspected, with no verdict either way.'
-            : n <= 6 ? 'Considered spam.'
-              : 'Considered spam with high confidence.';
+        : n <= 1 ? 'Scored as not spam.'
+          : n <= 4 ? 'Scored with no verdict either way.'
+            : n <= 6 ? 'Scored as spam.'
+              : 'Scored as spam with high confidence.';
     items.push({
       label: `Spam Confidence Level ${scl}`,
       value: meaning,
-      note: 'Microsoft 365 scores from -1 to 9. Anything at 5 or above is treated as spam by default.',
-      level: n === -1 ? 'caution' : n >= 5 ? 'bad' : n <= 1 ? 'good' : null,
+      // Deliberately colourless except for -1. On a cloud mailbox this number no
+      // longer decides anything, and a green `SCL:1` sitting beside `CAT:BIMP`
+      // is the tool contradicting itself in the sender's favour.
+      note: 'Microsoft states that on cloud mailboxes this score does not determine whether a message is treated as spam — the category below does. It survives for on-premises Exchange.',
+      level: n === -1 ? 'caution' : null,
     });
   }
 
@@ -96,7 +151,7 @@ export function microsoftVerdicts(headers) {
     });
   }
 
-  for (const [field, label] of [['SFV', 'Filter verdict'], ['CAT', 'Category']]) {
+  for (const [field, label] of [['CAT', 'Category'], ['SFV', 'Filter verdict'], ['SRV', 'Filter verdict']]) {
     const code = forefront[field];
     const known = SPAM_VERDICTS[code?.toUpperCase()];
     if (!known) continue;
@@ -108,13 +163,24 @@ export function microsoftVerdicts(headers) {
     });
   }
 
-  const safety = forefront.SFTY;
-  if (safety && IMPERSONATION_SAFETY[safety]) {
+  for (const [field, table_, label] of [['IPV', IP_VERDICT, 'IP reputation'], ['DIR', DIRECTION, 'Direction']]) {
+    const code = forefront[field];
+    const known = table_[code?.toUpperCase()];
+    if (!known) continue;
     items.push({
-      label: `Safety verdict ${safety}`,
-      value: `Flagged as ${IMPERSONATION_SAFETY[safety]}.`,
-      level: 'bad',
-      emphasis: true,
+      label: `${label}: ${code}`,
+      value: known[0],
+      level: known[1],
+    });
+  }
+
+  const safety = IMPERSONATION_SAFETY[forefront.SFTY];
+  if (safety) {
+    items.push({
+      label: `Safety verdict ${forefront.SFTY}`,
+      value: `Flagged as ${safety[0]}.`,
+      level: safety[1],
+      emphasis: safety[1] === 'bad',
     });
   }
 
@@ -128,4 +194,3 @@ export function microsoftVerdicts(headers) {
 
   return items;
 }
-

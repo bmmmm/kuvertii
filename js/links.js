@@ -308,7 +308,7 @@ export function inspectUnsubscribeLink(url, context = {}) {
     signals.push({
       level: 'good',
       title: 'Supports RFC 8058 one-click unsubscribe',
-      detail: 'Use your mail client\'s own unsubscribe button instead of this link — it talks to the header directly and skips the click tracker.',
+      detail: 'Use your mail client\'s own unsubscribe button instead of this link. RFC 8058 §3.1 requires the POST to go to the same address as the link, so the per-recipient id travels either way — what it drops is the context: no cookies, no HTTP authorisation, no page load.',
     });
   }
 
