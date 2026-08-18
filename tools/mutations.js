@@ -230,6 +230,54 @@ function neutraliseDisabledByMutation(text) {
     // rendered as further rows in this tool's own idiom. Nothing computed them.
   },
 
+  {
+    id: "truncation-goes-unreported",
+    promise: "A report that covers less than was pasted says so.",
+    file: "js/unfold.js",
+    find: "  if (!lines) return '';",
+    replace: "  return '';\n  // eslint-disable-next-line no-unreachable\n  if (!lines) return '';",
+    mustKill: ["a line of whitespace ends the header, and the report says so"],
+    // A ten-field header with one stray space analysed as six and reported it
+    // in the same tone a complete one gets.
+  },
+
+  {
+    id: "qp-decodes-any-escape",
+    promise: "A decoding that is not text was not that encoding.",
+    file: "js/decode.js",
+    find: "    offer(textFromBytes(decodeQuotedPrintable(raw)), 'quoted-printable');",
+    replace: "    offer(decodeQuotedPrintable(raw), 'quoted-printable');",
+    mustKill: [
+      "an ordinary Gmail message id is not a hidden address",
+      "genuine quoted-printable decodes to the text it encodes",
+    ],
+    // Without the UTF-8 check, =8b in a Gmail message id decoded to a lone
+    // continuation byte and the leftovers read as a recipient who never existed.
+  },
+
+  {
+    id: "percent-encoding-unknown",
+    promise: "The encoding every click tracker uses is one this tool reads.",
+    file: "js/decode.js",
+    find: "  if (/%[0-9A-F]{2}/i.test(raw)) {\n    offer(decodePercent(raw), 'percent-encoded');\n  }",
+    replace: "",
+    mustKill: [
+      "a percent-encoded address is an encoded copy like any other",
+      "an address hidden two layers deep is counted, not just displayed",
+    ],
+  },
+
+  {
+    id: "received-reads-its-comments",
+    promise: "A hop encrypted with TLS is not reported as plaintext.",
+    file: "js/findings.js",
+    find: "  const clause = withoutComments(head);",
+    replace: "  const clause = head;",
+    mustKill: ["a hop encrypted with TLS is not reported as plaintext"],
+    // RFC 5322 comments can hold anything, including the word the parser was
+    // looking for: (Postfix with SMTP) answered before "with ESMTPS" was read.
+  },
+
   // ------------------------------------------------- promises with no gate yet
   //
   // Everything below is expected to survive today. Each one is a promise the

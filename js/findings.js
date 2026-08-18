@@ -397,11 +397,29 @@ function recipientFinding(headers) {
     }
 
     // Tokens inside URLs — the unsubscribe link is the usual carrier.
+    //
+    // Two layers, because that is what a click tracker actually builds: the
+    // destination is base64 inside the path, and the address inside *that* is
+    // percent-encoded, because it sits in a query parameter. One pass found the
+    // URL and stopped, so the tool would print the address plainly in the
+    // decoded destination and, four lines higher, report one fewer hidden copy
+    // than it had just shown. The reader had to spot the contradiction.
     for (const url of extractUrls(header.value)) {
       for (const segment of url.split(/[/?&=#]/)) {
         if (segment.length < 12) continue;
         const decoded = bestDecode(segment, 0.5);
-        if (decoded) record(decoded.text, `${decoded.method} inside the URL`);
+        if (!decoded) continue;
+        record(decoded.text, `${decoded.method} inside the URL`);
+
+        // What the first pass produced is usually another URL. Splitting it the
+        // same way and decoding again costs nothing and is where the address
+        // normally is. Depth stops here: a third layer is not something senders
+        // build, and every extra pass is another chance to decode a coincidence.
+        for (const inner of decoded.text.split(/[/?&=#]/)) {
+          if (inner.length < 12) continue;
+          const twice = bestDecode(inner, 0.5);
+          if (twice) record(twice.text, `${decoded.method}, then ${twice.method}, inside the URL`);
+        }
       }
     }
 
@@ -1469,7 +1487,13 @@ function routeFinding(headers) {
         // `ESMTPS` and `ESMTPSA` are encrypted, `ESMTPA` is only authenticated,
         // and `ESMTP` is neither. The chip carried the word and never said
         // which — so the one fact a reader can get out of it went unstated.
-        hop.protocol ? (/^(?:e?smtps|https)/i.test(hop.protocol) ? 'encrypted hop' : 'unencrypted hop') : null,
+        hop.protocol
+          ? (/^(?:e?smtps|https)/i.test(hop.protocol)
+            ? 'encrypted hop'
+            : hop.tlsInComment
+              ? 'encrypted hop, according to a comment rather than the protocol'
+              : 'unencrypted hop')
+          : null,
         platform ? `${platform.name} — bulk mail platform` : null,
         encodedName ? `decodes to ${encodedName}` : null,
       ].filter(Boolean),
@@ -1499,12 +1523,45 @@ function routeFinding(headers) {
   };
 }
 
+/**
+ * A Received clause with its comments removed.
+ *
+ * RFC 5322 comments nest and can hold anything, including the words this
+ * function's callers are looking for. `from mail.example.com (Postfix with
+ * SMTP) by mx.example.net with ESMTPS` has two `with`s, and the first one is
+ * somebody's prose — but it was the one that answered, so a hop encrypted with
+ * TLS 1.3 was reported to the reader as unencrypted. A wrong statement about a
+ * security property, in a card about the route a message took.
+ *
+ * Depth-counted rather than a regex, because comments nest and `\(.*?\)` stops
+ * at the first close paren regardless of what opened after it.
+ */
+function withoutComments(text) {
+  let depth = 0;
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '\\') { i += 1; continue; } // quoted-pair: skip what it escapes
+    if (ch === '(') { depth += 1; continue; }
+    if (ch === ')') { depth = Math.max(0, depth - 1); out += ' '; continue; }
+    if (!depth) out += ch;
+  }
+  return out;
+}
+
 function parseReceived(value) {
   const [head, tail] = splitOnce(value, ';');
+  const clause = withoutComments(head);
   return {
-    from: head.match(/\bfrom\s+([^\s;()]+)/i)?.[1] ?? null,
-    by: head.match(/\bby\s+([^\s;()]+)/i)?.[1] ?? null,
-    protocol: head.match(/\bwith\s+([A-Za-z0-9]+)/i)?.[1] ?? null,
+    from: clause.match(/\bfrom\s+([^\s;()]+)/i)?.[1] ?? null,
+    by: clause.match(/\bby\s+([^\s;()]+)/i)?.[1] ?? null,
+    protocol: clause.match(/\bwith\s+([A-Za-z0-9]+)/i)?.[1] ?? null,
+    // Kept from the full line, comments included. RFC 3848 says a hop that used
+    // TLS should say `ESMTPS`, and the ones that instead write `with ESMTP
+    // (using TLSv1.3 …)` are being sloppy rather than unencrypted. Reporting
+    // those as plaintext would be the same kind of wrong in the other
+    // direction, so the two cases are told apart rather than merged.
+    tlsInComment: /\bTLS(?:v[\d.]+)?\b/i.test(head),
     date: tail?.trim() || null,
   };
 }

@@ -5,7 +5,7 @@ import { checkHost } from './blocklist.js';
 import { verdictRows } from './snapshot.js';
 import { neutralise } from './control.js';
 import { analyse } from './findings.js';
-import { MAX_HEADER_BYTES, parseHeaders } from './unfold.js';
+import { MAX_HEADER_BYTES, readHeaders, skippedNote } from './unfold.js';
 
 const input = document.querySelector('#header-input');
 const results = document.querySelector('#results');
@@ -111,7 +111,7 @@ function run() {
     return;
   }
 
-  const headers = parseHeaders(text);
+  const { headers, skipped } = readHeaders(text);
   if (!headers.length) {
     emptyState.hidden = false;
     status.textContent = `Nothing here parsed as a header block.${clipped}`;
@@ -126,7 +126,7 @@ function run() {
     return;
   }
 
-  status.textContent = `${headers.length} header fields read. Nothing left this page.${clipped}`;
+  status.textContent = `${headers.length} header fields read.${skippedNote(skipped)} Nothing left this page.${clipped}`;
 
   for (const finding of findings) {
     const { card, list } = renderFinding(finding);

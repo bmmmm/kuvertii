@@ -83,9 +83,25 @@ export function dedent(text) {
  * preserved — `Received` and `Authentication-Results` legitimately repeat, and
  * their repetition is often the interesting part.
  */
-export function parseHeaders(text) {
+/**
+ * Parse a header block, and account for every line of it.
+ *
+ * `parseHeaders` below is this without the accounting, kept because most
+ * callers only want the fields. The accounting exists because of the way this
+ * function fails: it stops at the first line it reads as a boundary and returns
+ * what it had, and everything after that simply is not in the answer. Nothing
+ * said so. A ten-field header with one stray space in the middle analysed as
+ * six fields and reported "6 header fields read" in the same confident tone as
+ * a complete one — and the four it dropped were the authentication results, a
+ * lookalike Reply-To and an unsubscribe link pointing at a login page.
+ *
+ * A narrower answer than the reader asked for is the failure this whole project
+ * is written against. It cannot also be the failure of the parser reporting it.
+ */
+export function readHeaders(text) {
   const lines = dedent(String(text ?? ''));
   const headers = [];
+  const skipped = { lines: 0, reason: null };
   let current = null;
   let inBody = false;
 
@@ -102,7 +118,12 @@ export function parseHeaders(text) {
   };
 
   lines.forEach((line, index) => {
-    if (inBody) return;
+    if (inBody) {
+      // Counted rather than ignored: this is the number the reader needs in
+      // order to know whether the answer covers what they pasted.
+      if (line.length) skipped.lines += 1;
+      return;
+    }
 
     if (!line.trim()) {
       // A blank line ends the header block and starts the body. Everything
@@ -111,6 +132,12 @@ export function parseHeaders(text) {
       if (headers.length || current) {
         flush();
         inBody = true;
+        // Which kind of boundary it was. An empty line is the one RFC 5322
+        // defines; a line of spaces or tabs is obs-FWS, which several clients
+        // emit mid-header and which this parser treats the same way. The
+        // distinction matters to a reader deciding whether the paste was
+        // truncated or the message simply ended.
+        skipped.reason = line.length ? 'a line containing only whitespace' : 'a blank line';
       }
       return;
     }
@@ -163,7 +190,24 @@ export function parseHeaders(text) {
   });
 
   flush();
-  return promoteLeadingSender(resolveAliasConflicts(headers));
+  return { headers: promoteLeadingSender(resolveAliasConflicts(headers)), skipped };
+}
+
+/**
+ * What to tell the reader about the lines that were not read.
+ *
+ * Empty when nothing was dropped, so a caller can append it unconditionally.
+ * Written once here rather than in each renderer, because the last time one
+ * claim lived in two places they had already drifted before anyone looked.
+ */
+export function skippedNote({ lines, reason }) {
+  if (!lines) return '';
+  return ` ${lines} further line${lines === 1 ? '' : 's'} were treated as message body, after ${reason}.`;
+}
+
+/** The fields alone, for the callers that have no use for the accounting. */
+export function parseHeaders(text) {
+  return readHeaders(text).headers;
 }
 
 /**

@@ -151,7 +151,11 @@ export function decodeCandidates(value) {
   if (/=\?[^?]+\?[BQbq]\?/.test(raw)) {
     offer(decodeEncodedWords(raw), 'RFC 2047 encoded-word');
   } else if (/=[0-9A-F]{2}/i.test(raw)) {
-    offer(decodeQuotedPrintable(raw), 'quoted-printable');
+    offer(textFromBytes(decodeQuotedPrintable(raw)), 'quoted-printable');
+  }
+
+  if (/%[0-9A-F]{2}/i.test(raw)) {
+    offer(decodePercent(raw), 'percent-encoded');
   }
 
   if (/^(?:[0-9a-f]{2}){6,}$/i.test(raw)) {
@@ -200,6 +204,64 @@ export function decodeSegments(value, threshold = 0.5) {
 export function bestDecode(value, threshold = 0.5) {
   const [top] = decodeCandidates(value);
   return top && top.score >= threshold ? top : null;
+}
+
+/**
+ * Bytes back into text, or nothing at all.
+ *
+ * The strictness is the feature. `decodeQuotedPrintable` produces one character
+ * per byte, which is what `decodeEncodedWords` wants — it applies the charset
+ * the header declared. Standalone there is no declared charset, and mail
+ * headers carry UTF-8, so this asks whether the bytes are UTF-8 and answers
+ * null when they are not.
+ *
+ * That answer is what separates an encoding from a coincidence. An ordinary
+ * Gmail message id contains `=8b`, which is a valid quoted-printable escape and
+ * decodes to a lone continuation byte — no UTF-8 sequence begins with 0x8B. The
+ * old chain decoded it anyway, and the leftover characters read as an address,
+ * so the tool announced a hidden recipient that did not exist, with its
+ * strongest wording, on ordinary personal mail.
+ *
+ * The same strictness earns something as well as refusing something: real
+ * quoted-printable finally decodes properly. `Gr=C3=BC=C3=9Fe` was rendering as
+ * `GrÃ¼Ã<U+009F>e` — the bytes, one per character, never reassembled.
+ */
+function textFromBytes(latin1) {
+  const bytes = Uint8Array.from(latin1, (ch) => ch.charCodeAt(0) & 0xff);
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Percent-encoding, undone as far as it goes.
+ *
+ * The form every click tracker writes: `?u=max.mustermann%40example.org`. It
+ * was the one encoding the chain did not know, so an address hidden that way —
+ * which is to say, the way SendGrid, Mailchimp and HubSpot all hide it — was
+ * not counted among the copies the reader was told about. The tool would decode
+ * the surrounding base64, print the address in the destination URL, and then
+ * report one fewer hidden copy than it had just shown.
+ *
+ * A second pass because double-encoding is ordinary in a URL that has been
+ * through two systems; `decodeURIComponent` throwing on a malformed sequence is
+ * the validity check, and a throw means this was not percent-encoding.
+ */
+function decodePercent(text) {
+  try {
+    const once = decodeURIComponent(text);
+    if (once === text) return null;
+    if (!/%[0-9A-F]{2}/i.test(once)) return once;
+    try {
+      return decodeURIComponent(once);
+    } catch {
+      return once;
+    }
+  } catch {
+    return null;
+  }
 }
 
 export function decodeQuotedPrintable(text) {

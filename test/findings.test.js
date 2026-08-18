@@ -787,3 +787,62 @@ test('no fixture makes the analysis fault', () => {
     assert.deepEqual(faults, [], `a producer threw on a fixture: ${faults.map((f) => f.id).join(', ')}`);
   }
 });
+
+test('a hop encrypted with TLS is not reported as plaintext', () => {
+  // The protocol token was read from the first `with` in the line, and RFC 5322
+  // comments can contain anything — `(Postfix with SMTP)` answered before
+  // `with ESMTPS` was reached. A TLS 1.3 hop was reported to the reader as
+  // unencrypted, in the card about the route the message took.
+  const finding = analyse(parseHeaders([
+    'From: a@b.example',
+    'Received: from mail.example.com (Postfix with SMTP)',
+    '        by mx.test.com with ESMTPS id abc123',
+    '        (version=TLS1_3 cipher=TLS_AES_256_GCM_SHA384);',
+    '        Mon, 17 Aug 2026 09:14:02 -0700 (PDT)',
+  ].join('\n'))).find((f) => f.id === 'route');
+
+  const hop = finding.items[0];
+  assert.match(hop.value, /ESMTPS/, 'the protocol comes from the clause, not the comment');
+  assert.ok(hop.chips.includes('encrypted hop'));
+  assert.ok(!hop.chips.includes('unencrypted hop'));
+});
+
+test('a hop that only mentions TLS in a comment is described as exactly that', () => {
+  // RFC 3848 says a hop that used TLS should say ESMTPS. One that writes
+  // `with ESMTP (using TLSv1.2 …)` is being sloppy rather than plaintext, and
+  // calling it unencrypted would be the same kind of wrong in the other
+  // direction — so the two are told apart instead of merged.
+  const finding = analyse(parseHeaders([
+    'From: a@b.example',
+    'Received: from mail.example.com by mx.test.com with ESMTP (using TLSv1.2);',
+    '        Mon, 17 Aug 2026 09:14:02 -0700 (PDT)',
+  ].join('\n'))).find((f) => f.id === 'route');
+
+  const hop = finding.items[0];
+  assert.ok(
+    hop.chips.some((chip) => /according to a comment/.test(chip)),
+    `chips were ${JSON.stringify(hop.chips)}`,
+  );
+});
+
+test('an address hidden two layers deep is counted, not just displayed', () => {
+  // A click tracker puts the destination in base64 and the address inside that
+  // in percent-encoding, because it sits in a query parameter. One decode pass
+  // found the URL and stopped — so the tool printed the address plainly in the
+  // decoded destination and, four lines above it, reported one fewer hidden
+  // copy than it had just shown.
+  const inner = 'https://shop.example/abmelden?u=reader%40example.org';
+  const token = Buffer.from(inner).toString('base64');
+  const finding = analyse(parseHeaders([
+    'From: Shop <news@shop.example>',
+    'To: reader@example.org',
+    `List-Unsubscribe: <https://u1.ct.sendgrid.net/ls/click?upn=${token}>`,
+  ].join('\n'))).find((f) => f.id === 'recipients');
+
+  const row = finding.items.find((i) => i.label === 'reader@example.org');
+  assert.ok(row, 'the recipient row exists');
+  assert.ok(
+    (row.chips ?? []).some((chip) => /percent-encoded/.test(chip)),
+    `the nested copy is named: ${JSON.stringify(row.chips)}`,
+  );
+});

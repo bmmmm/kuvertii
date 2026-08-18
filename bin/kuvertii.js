@@ -16,7 +16,7 @@ import { clearClipboard, readClipboard } from '../js/clipboard.js';
 import { analyse } from '../js/findings.js';
 import { isQuit, keypresses } from '../js/keys.js';
 import { createRenderer } from '../js/terminal.js';
-import { MAX_HEADER_BYTES, parseHeaders } from '../js/unfold.js';
+import { MAX_HEADER_BYTES, readHeaders, skippedNote } from '../js/unfold.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DATA = join(HERE, '..', 'data');
@@ -100,7 +100,7 @@ function headerBlock(text) {
 // --------------------------------------------------------------------- report
 
 async function report(text, renderer, out = process.stdout) {
-  const headers = parseHeaders(headerBlock(text));
+  const { headers, skipped } = readHeaders(headerBlock(text));
   if (!headers.length) {
     out.write(`${renderer.paint('\x1b[33m', 'Nothing here parsed as a header block.')}\n`);
     return false;
@@ -121,7 +121,7 @@ async function report(text, renderer, out = process.stdout) {
     out.write(`${renderer.renderFinding(rendered)}\n`);
   }
 
-  out.write(`\n${renderer.paint('\x1b[2m', `${headers.length} header fields read. Nothing left this machine.`)}\n`);
+  out.write(`\n${renderer.paint('\x1b[2m', `${headers.length} header fields read.${skippedNote(skipped)} Nothing left this machine.`)}\n`);
   return true;
 }
 
