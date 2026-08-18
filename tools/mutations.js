@@ -99,6 +99,31 @@ function neutraliseDisabledByMutation(text) {
   },
 
   {
+    id: 'allpass-counts-any-pass',
+    promise: 'A headline of "every check passed" survives no decisive failure.',
+    file: 'js/findings.js',
+    find: `  const allPass = !failed.length && compauth !== 'fail' && decisivePasses >= 2;`,
+    replace: `  const allPass = Object.values(verdicts).filter((v) => v === 'pass').length >= 2;`,
+    mustKill: [
+      '"every check passed" is never printed over a check that did not',
+      'a composite-authentication failure also disqualifies',
+    ],
+    // The original: two passes of any kind earned the headline, and arc=pass
+    // plus bimi=pass are two. 302 of 3,528 verdict combinations took it.
+  },
+
+  {
+    id: 'tone-computed-beside-items',
+    promise: 'A card carrying a failure is toned as one.',
+    file: 'js/findings.js',
+    find: `    tone: items.some((item) => item.level === 'bad') ? 'alert' : 'info',`,
+    replace: `    tone: failed.length ? 'alert' : 'info',`,
+    mustKill: ['a card carrying a failure is never toned as though it were not'],
+    // `failed` only ever held SPF, DKIM and DMARC, so a red compauth row sat in
+    // a blue card — routine at a glance, which is the glance most rows get.
+  },
+
+  {
     id: 'exit-discards-buffer',
     promise: 'A report longer than a pipe buffer arrives whole.',
     file: 'bin/kuvertii.js',

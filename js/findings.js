@@ -978,6 +978,16 @@ function originFinding(headers) {
 // -------------------------------------------------------------------- auth
 
 /**
+ * The headline a message gets when nothing that decides anything failed.
+ *
+ * Exported so that the test asserting it is never printed over a failure can
+ * compare against the string the code actually uses. A test carrying its own
+ * copy of a sentence stops testing the moment somebody rewords the original,
+ * and says nothing while it stops.
+ */
+export const ALL_CLEAR_TITLE = 'Every check passed. That proves less than it sounds.';
+
+/**
  * A DKIM `t=`/`x=` value as a Date, or null when it is not a time at all.
  *
  * Both tags are decimal seconds and the sender writes them. The pattern that
@@ -1369,19 +1379,45 @@ function authFinding(headers) {
     });
   }
 
-  const allPass = Object.values(verdicts).filter((v) => v === 'pass').length >= 2;
   const failed = Object.entries(verdicts)
     .filter(([mechanism, verdict]) => DECISIVE.has(mechanism) && verdict === 'fail')
     .map(([mechanism]) => mechanism.toUpperCase());
 
+  // "Everything passed" has to mean everything that decides anything, and it
+  // has to become false the moment one of them says otherwise. Counting passes
+  // was neither. Two passes were enough to earn the headline, and `arc=pass`
+  // with `bimi=pass` is two — a forwarder's seal and a logo entitlement,
+  // neither of which asserts anything about who sent this. So a message that
+  // failed SPF and DMARC outright, with a REJECT policy published, was
+  // headlined as fully authenticated with the red rows printed underneath it.
+  //
+  // 302 of the 3,528 verdict combinations took that path. Not an edge case —
+  // a third of every combination in which something decisive failed. It went
+  // unnoticed because the two fixtures are a message that passes everything and
+  // one that fails everything, and the fault only appears in between.
+  //
+  // `compauth` is in the same sentence because it is in the same header and it
+  // is rendered as a red row: Microsoft weighing everything together and saying
+  // someone outside wrote as though they were a colleague. It decided nothing
+  // about this headline, so SPF, DKIM and DMARC all passing was enough to print
+  // "every check passed" directly above it.
+  const decisivePasses = [...DECISIVE].filter((mechanism) => verdicts[mechanism] === 'pass').length;
+  const allPass = !failed.length && compauth !== 'fail' && decisivePasses >= 2;
+
   return {
     id: 'auth',
     title: allPass
-      ? 'Every check passed. That proves less than it sounds.'
+      ? ALL_CLEAR_TITLE
       : failed.length
         ? 'The sender\'s identity did not check out'
         : 'Authentication results',
-    tone: failed.length ? 'alert' : 'info',
+    // Read off the rows rather than computed beside them. The parallel version
+    // said 'info' whenever `failed` was empty, and `failed` only ever held SPF,
+    // DKIM and DMARC — so a red `compauth=fail` row sat in a blue card, which
+    // is what a reader glancing at colour would take for routine. Any card
+    // carrying a row this tool marked `bad` is alert, by construction, and
+    // there is no second place for that decision to drift away from.
+    tone: items.some((item) => item.level === 'bad') ? 'alert' : 'info',
     lede: allPass
       // The closing clause is a claim about this specific message, so it is
       // only made when the header actually carries a filter verdict saying so.
