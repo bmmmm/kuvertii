@@ -1,0 +1,6 @@
+{
+  "entries": 391406,
+  "measuredAt": "2026-08-18",
+  "source": "https://raw.githubusercontent.com/mitchellkrogza/Phishing.Database/master/phishing-domains-ACTIVE.txt",
+  "why": "The reference the 2x drift guard in build-blocklist.mjs compares against. It lives here, committed, because data/ is gitignored and CI checks out fresh — reading the previous build's own metadata meant the guard never ran anywhere it mattered. Update this deliberately, with a commit message saying why the feed legitimately moved."
+}

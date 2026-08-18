@@ -142,12 +142,30 @@ async function main() {
     throw new Error(`only ${hosts.size} usable hosts — refusing to publish a truncated list`);
   }
 
-  // Compared against the last build rather than against a constant, because the
-  // feed grows and a fixed ceiling would need moving. A collapse is as much a
-  // fault as a flood: both mean the file is not what it was yesterday.
-  const previous = await readFile(join(ROOT, 'data/blocklist.json'), 'utf8')
+  // Compared against a committed reference rather than against the last build.
+  //
+  // It used to read data/blocklist.json — the previous build's own metadata —
+  // which works perfectly on a developer's machine and never once ran in the
+  // place it matters. `data/` is gitignored, CI checks out fresh, so `previous`
+  // was null on every scheduled run and the comparison was skipped entirely.
+  // The guard existed, was documented in the workflow, and had never executed
+  // in production. The only floor actually standing between a collapsed feed
+  // and the published site was `entries < 1000`, which a feed that fell from
+  // 391,406 to 1,500 clears without trouble.
+  //
+  // A committed baseline cannot silently disappear the way a build artefact or
+  // a CI cache can. It drifts as the feed grows, which is the intended cost:
+  // when the drift becomes real, updating it is a commit somebody writes a
+  // reason for, rather than a threshold that quietly stopped applying.
+  const previous = await readFile(join(ROOT, 'tools/feed-baseline.json'), 'utf8')
     .then((text) => JSON.parse(text).entries)
     .catch(() => null);
+  if (!Number.isFinite(previous) || previous <= 0) {
+    throw new Error(
+      'tools/feed-baseline.json is missing or unreadable, so the drift guard has nothing to compare against. '
+      + 'A guard that cannot run must not be mistaken for one that passed.',
+    );
+  }
   if (Number.isFinite(previous) && previous > 0) {
     const ratio = hosts.size / previous;
     if (ratio < MIN_RATIO || ratio > MAX_RATIO) {

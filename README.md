@@ -128,7 +128,11 @@ Read the results asymmetrically, because the data is asymmetric:
   every domain beneath it; public suffixes are rejected against the Public
   Suffix List and a short list of major providers by name. It also refuses a
   build that has changed size by more than a factor of two, in either
-  direction, and records the sha256 of the feed it read.
+  direction, against a committed baseline — and records the sha256 of the feed
+  it read. The baseline is committed rather than carried over from the previous
+  build because that build output is gitignored: the check compared against a
+  file CI never has, so it was skipped on every scheduled run until this was
+  noticed. A guard that cannot run is now a build failure rather than a pass.
 - **A miss is not an all-clear.** The snapshot is a point-in-time copy and
   phishing domains are often only hours old. The dangerous ones are precisely
   those no list has caught yet.

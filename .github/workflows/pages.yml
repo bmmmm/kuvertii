@@ -73,7 +73,10 @@ jobs:
       # and means every deploy ships a fresh snapshot.
       #
       # The builder refuses a feed that would tar a whole registry, and one that
-      # has changed by more than a factor of two since the last build. Both
+      # has changed by more than a factor of two against tools/feed-baseline.json,
+      # which is committed precisely so this check can run here: it used to
+      # compare against the previous build own output, which is gitignored, so
+      # on a fresh checkout the comparison was skipped every single time. Both
       # conditions fail the job rather than publishing quietly.
       - name: Build blocklist
         run: node tools/build-blocklist.mjs

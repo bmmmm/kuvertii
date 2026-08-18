@@ -278,6 +278,22 @@ function neutraliseDisabledByMutation(text) {
     // looking for: (Postfix with SMTP) answered before "with ESMTPS" was read.
   },
 
+  {
+    id: "drift-guard-cannot-fire",
+    promise: "The drift guard runs where the build runs.",
+    file: "tools/build-blocklist.mjs",
+    find: "  const previous = await readFile(join(ROOT, 'tools/feed-baseline.json'), 'utf8')",
+    replace: "  const previous = await readFile(join(ROOT, 'data/blocklist.json'), 'utf8')",
+    mustKill: [
+      "a feed that collapsed is refused, in the environment CI builds in",
+      "a guard that cannot run is not mistaken for one that passed",
+    ],
+    // The original. It reads the previous build own metadata, which exists on a
+    // developer machine and never in CI, where data/ is gitignored and every
+    // run is a fresh checkout. The guard was documented, correct, and had never
+    // once executed in production.
+  },
+
   // ------------------------------------------------- promises with no gate yet
   //
   // Everything below is expected to survive today. Each one is a promise the
