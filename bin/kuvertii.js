@@ -11,7 +11,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { has, normaliseHost } from '../js/bloom.js';
+import { lookup, validate, verdictRows } from '../js/snapshot.js';
 import { clearClipboard, readClipboard } from '../js/clipboard.js';
 import { analyse } from '../js/findings.js';
 import { isQuit, keypresses } from '../js/keys.js';
@@ -50,52 +50,33 @@ clickable. Nothing in this program ever opens one.`;
  */
 async function checkHosts(hosts) {
   if (!hosts?.length) return [];
-  let meta;
-  let bytes;
+
+  let data;
   try {
-    meta = JSON.parse(await readFile(join(DATA, 'blocklist.json'), 'utf8'));
-    bytes = new Uint8Array(await readFile(join(DATA, 'blocklist.bin')));
-  } catch {
-    return hosts.map((host) => ({ host, unavailable: true }));
+    const meta = JSON.parse(await readFile(join(DATA, 'blocklist.json'), 'utf8'));
+    const bytes = new Uint8Array(await readFile(join(DATA, 'blocklist.bin')));
+    // The same refusal the page makes, and for the same reason. Mirroring the
+    // lookup without it meant a truncated .bin reported every host as absent
+    // from a snapshot it could not read — a miss phrased exactly like one the
+    // filter had actually earned.
+    data = validate(meta, bytes);
+  } catch (error) {
+    const missing = error?.code === 'ENOENT';
+    return hosts.map((host) => ({
+      host,
+      unavailable: true,
+      why: missing
+        ? 'No snapshot on disk, so no check was made. Build one with: node tools/build-blocklist.mjs'
+        : `The snapshot could not be read, so no check was made: ${error.message}`,
+    }));
   }
 
-  return hosts.map((hostname) => {
-    const host = normaliseHost(hostname);
-    const labels = host.split('.');
-    for (let i = 0; i + 1 < labels.length; i++) {
-      const candidate = labels.slice(i).join('.');
-      if (has(bytes, candidate, meta.bits, meta.hashes)) {
-        return { host, listed: true, matched: candidate, meta };
-      }
-    }
-    return { host, listed: false, meta };
-  });
+  return hosts.map((hostname) => lookup(data, hostname));
 }
 
-/** Blocklist verdicts as finding items, in the same shape the page renders. */
+/** Blocklist verdicts as finding items — the same rows the page renders. */
 function blocklistItems(results) {
-  return results.map((result) => {
-    if (result.unavailable) {
-      return {
-        label: `Blocklist check unavailable (${result.host})`,
-        value: 'No snapshot on disk, so no check was made. Build one with: node tools/build-blocklist.mjs',
-        level: 'caution',
-      };
-    }
-    if (result.listed) {
-      return {
-        label: `${result.matched} is on a phishing blocklist`,
-        value: `Snapshot of ${result.meta.source.name}, ${result.meta.entries.toLocaleString('en')} domains, built ${result.meta.builtAt}. Treat this link as hostile.`,
-        note: `Matching is probabilistic — roughly 1 in ${Math.round(1 / result.meta.falsePositiveRate)} lookups can be a false alarm.`,
-        level: 'bad',
-        emphasis: true,
-      };
-    }
-    return {
-      label: `${result.host} is not in the blocklist snapshot`,
-      value: 'This is not a clean bill of health. The snapshot is a point-in-time copy, and phishing domains are typically hours old.',
-    };
-  });
+  return verdictRows(results);
 }
 
 // ---------------------------------------------------------------------- input

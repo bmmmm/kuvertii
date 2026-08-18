@@ -2,6 +2,7 @@
 // storage, no history entry, no form restoration.
 
 import { checkHost } from './blocklist.js';
+import { verdictRows } from './snapshot.js';
 import { neutralise } from './control.js';
 import { analyse } from './findings.js';
 import { MAX_HEADER_BYTES, parseHeaders } from './unfold.js';
@@ -79,36 +80,9 @@ function renderFinding(finding) {
  * domains rarely live that long.
  */
 async function appendBlocklistVerdict(list, hosts) {
-  for (const host of hosts) {
-    const result = await checkHost(host);
-
-    if (result.unavailable) {
-      list.append(renderItem({
-        label: `Blocklist check unavailable (${host})`,
-        value: 'The offline blocklist could not be loaded, so no check was made.',
-        level: 'caution',
-      }));
-      continue;
-    }
-
-    if (result.listed) {
-      list.append(renderItem({
-        label: `${result.matched} is on a phishing blocklist`,
-        value: `Snapshot of ${result.meta.source.name}, ${result.meta.entries.toLocaleString('en')} domains, built ${result.meta.builtAt}. Treat this link as hostile.`,
-        note: `Matching is probabilistic — roughly 1 in ${Math.round(1 / result.meta.falsePositiveRate)} lookups can be a false alarm. Verify at ${result.meta.source.homepage} before concluding.`,
-        level: 'bad',
-        emphasis: true,
-      }));
-    } else {
-      list.append(renderItem({
-        label: `${host} is not in the blocklist snapshot`,
-        value: 'This is not a clean bill of health. The snapshot is a point-in-time copy, and phishing domains are typically hours old — the dangerous ones are precisely those no list has caught yet.',
-        note: result.meta
-          ? `${result.meta.source.name}, built ${result.meta.builtAt}, ${result.meta.entries.toLocaleString('en')} domains.`
-          : null,
-      }));
-    }
-  }
+  const results = [];
+  for (const host of hosts) results.push(await checkHost(host));
+  for (const row of verdictRows(results)) list.append(renderItem(row));
 }
 
 function run() {

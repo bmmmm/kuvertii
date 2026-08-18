@@ -124,6 +124,32 @@ function neutraliseDisabledByMutation(text) {
   },
 
   {
+    id: 'rate-ignores-the-label-walk',
+    promise: 'The printed false-alarm rate is the rate of the lookup that was made.',
+    file: 'js/snapshot.js',
+    find: `  const chance = 1 - ((1 - perProbe) ** Math.max(probes, 1));`,
+    replace: `  const chance = perProbe;`,
+    mustKill: ['the printed false-alarm rate matches what a measurement finds'],
+    // The original figure was the rate of one Bloom probe, printed beside a
+    // lookup that makes one per label boundary — 1 in 200 claimed where the
+    // four-label ESP hostnames it is usually shown for are 1 in 65.
+  },
+
+  {
+    id: 'lookup-accepts-unchecked-bytes',
+    promise: 'A filter that was never validated cannot answer.',
+    file: 'js/snapshot.js',
+    find: `  if (!snapshot?.[CHECKED]) {
+    throw new TypeError('lookup needs a snapshot from validate(); an unchecked filter cannot answer honestly');
+  }`,
+    replace: '',
+    mustKill: ['an unvalidated filter cannot be looked up in at all'],
+    // The command-line build mirrored the page's lookup without the page's
+    // refusal, so a truncated .bin answered "not in the snapshot" for every
+    // host. The brand is what stops that being a rule someone must remember.
+  },
+
+  {
     id: 'exit-discards-buffer',
     promise: 'A report longer than a pipe buffer arrives whole.',
     file: 'bin/kuvertii.js',
