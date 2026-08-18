@@ -9,40 +9,61 @@ on:
     - cron: '17 4 * * *'
   workflow_dispatch:
 
+# Read-only by default. `pages: write` and `id-token: write` are granted to the
+# deploy job alone: the test job runs `node --test` and has no business holding
+# a token that can publish the site. There is no pull_request trigger, so this
+# is defence in depth rather than a hole — but it costs two lines.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
+# Actions are pinned to full commit SHAs rather than to moving major tags. A
+# version tag is a pointer the upstream owner can move, and in March 2026 the
+# tj-actions/trivy-action compromise did exactly that to 75 of its 76 tags at
+# once. Dependabot already watches github-actions monthly here and rewrites both
+# the SHA and its trailing comment, so keeping them current costs nothing.
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      # The floor declared in package.json engines, and the version the deploy
+      # actually runs on. A floor nothing exercises is a guess.
+      matrix:
+        node: ['20', '24']
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: '24'
+          node-version: ${{ matrix.node }}
       - run: node --test
 
   deploy:
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '24'
 
       # Bakes the phishing feed into data/. Downloading it here rather than
       # committing it keeps the repo free of a large binary that changes daily,
       # and means every deploy ships a fresh snapshot.
+      #
+      # The builder refuses a feed that would tar a whole registry, and one that
+      # has changed by more than a factor of two since the last build. Both
+      # conditions fail the job rather than publishing quietly.
       - name: Build blocklist
         run: node tools/build-blocklist.mjs
 
@@ -51,12 +72,39 @@ jobs:
           test -s data/blocklist.bin || { echo "blocklist.bin missing or empty"; exit 1; }
           node -e '
             const m = require("./data/blocklist.json");
+            const { statSync } = require("node:fs");
             if (m.entries < 1000) { console.error("suspiciously small:", m.entries); process.exit(1); }
-            console.log(`blocklist: ${m.entries} entries, built ${m.builtAt}`);
+            // The same check js/blocklist.js makes at load time. Catching a
+            // mismatch here means the browser never has to.
+            const expected = Math.ceil(m.bits / 8);
+            const actual = statSync("./data/blocklist.bin").size;
+            if (actual !== expected) {
+              console.error(`filter is ${actual} bytes, metadata describes ${expected}`);
+              process.exit(1);
+            }
+            console.log(`blocklist: ${m.entries} entries, built ${m.builtAt}, sha256 ${m.sourceSha256.slice(0, 12)}`);
           '
 
-      - uses: actions/upload-pages-artifact@v5
+      # js/psl.js is committed rather than built here — see the note at the top
+      # of tools/build-psl.mjs. This only checks it has not gone stale enough to
+      # matter, and never fails the deploy over it: a suffix list a few weeks old
+      # is still overwhelmingly better than the 21-entry approximation it
+      # replaced, and a publicsuffix.org outage must not stop a security fix
+      # from shipping.
+      - name: Note the age of the suffix list
+        continue-on-error: true
+        run: |
+          node -e '
+            const { SOURCE } = await import("./js/psl.js");
+            const { EXACT } = await import("./js/psl.js");
+            console.log(`suffix list: ${EXACT.size} rules from ${SOURCE.sections.join(" + ")}`);
+          ' --input-type=module
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
+          # The whole tree. `upload-pages-artifact` excludes .git and .github,
+          # and everything else that goes along — bin/, test/, tools/ — is
+          # already public in this repository. Untidy rather than exposing.
           path: .
       - id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5

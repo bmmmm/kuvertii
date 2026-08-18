@@ -51,3 +51,20 @@ test('a host absent from an empty filter is reported absent', () => {
   const { bytes, bits, hashes } = build(['only.example']);
   assert.ok(!has(bytes, 'something-else.example', bits, hashes));
 });
+
+// A Bloom filter cannot notice that its own parameters are wrong, and both ways
+// of getting them wrong are silent. These are the two that matter.
+
+test('bits of zero would accuse every domain on earth', () => {
+  // `position % 0` is NaN, so every probe reads bit 0 of byte 0.
+  const bytes = new Uint8Array(64);
+  bytes[0] = 0xff;
+  for (const host of ['totally-innocent.example', 'google.com', 'a.b.c']) {
+    assert.equal(has(bytes, host, 0, 3), true, 'this is why validate() exists');
+  }
+});
+
+test('no hashes at all does the same', () => {
+  const bytes = new Uint8Array(64);
+  assert.equal(has(bytes, 'anything.example', 1000, 0), true);
+});

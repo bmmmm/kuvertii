@@ -12,7 +12,7 @@
     "test": "node --test",
     "build:blocklist": "node tools/build-blocklist.mjs",
     "build:psl": "node tools/build-psl.mjs",
-    "serve": "python3 -m http.server 8000"
+    "serve": "node tools/serve.mjs"
   },
   "engines": {
     "node": ">=20"

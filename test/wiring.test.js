@@ -23,13 +23,26 @@ test('every element app.js queries exists in the markup', () => {
   }
 });
 
-/** Every module reachable from an entry point, following relative imports. */
+/**
+ * Every module reachable from an entry point.
+ *
+ * Matches every specifier, not only the relative ones. The previous pattern was
+ * `/from '(\.[^']+)'/g`, which could not see a bare specifier at all —
+ * `import chalk from 'chalk'` in js/microsoft.js passed this file 9/9. The
+ * zero-dependency claim then rested on the accident that CI never runs an
+ * install, and would have evaporated the moment one was added.
+ */
 function importGraph(entry) {
   const seen = new Set();
   const walk = (module) => {
     if (seen.has(module)) return;
     seen.add(module);
-    for (const [, spec] of read(module).matchAll(/from '(\.[^']+)'/g)) {
+    for (const [, spec] of read(module).matchAll(/(?:from|import) '([^']+)'/g)) {
+      assert.ok(
+        spec.startsWith('.') || spec.startsWith('node:'),
+        `${module} imports ${spec}, which is neither a relative path nor Node stdlib`,
+      );
+      if (!spec.startsWith('.')) continue;
       const target = resolve(ROOT, dirname(module), spec);
       assert.ok(existsSync(target), `${module} imports missing ${spec}`);
       walk(target.slice(ROOT.length + 1));
@@ -102,8 +115,13 @@ test('the CSP allows the page to work and nothing beyond it', () => {
 });
 
 test('the page makes no storage calls at all', () => {
-  for (const module of ['js/app.js', 'js/findings.js', 'js/blocklist.js', 'js/links.js']) {
-    assert.ok(!/localStorage|sessionStorage|document\.cookie|indexedDB/.test(code(read(module))),
+  // Walked, not listed. The hand-kept list named four modules; the browser
+  // loads nine, so bloom.js, decode.js, senders.js, microsoft.js, psl.js and
+  // unfold.js were never checked.
+  const graph = importGraph('js/app.js');
+  assert.ok(graph.size >= 9, `sanity: the graph looks too small (${graph.size})`);
+  for (const module of graph) {
+    assert.ok(!/localStorage|sessionStorage|document\.cookie|indexedDB|caches\b/.test(code(read(module))),
       `${module} touches persistent storage`);
   }
 });
@@ -116,7 +134,29 @@ function code(source) {
     .join('\n');
 }
 
-test('untrusted header text never reaches innerHTML', () => {
-  assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML/.test(code(appJs)),
-    'header content must only ever be set via textContent');
+test('untrusted header text never reaches a markup sink', () => {
+  // Every module the page loads, not only app.js — and every sink, not only the
+  // three obvious ones. setAttribute is here because an attribute built from
+  // header text is the same class of mistake wearing different clothes.
+  const SINKS = /innerHTML|outerHTML|insertAdjacentHTML|document\.write|setAttribute|eval\(|new Function|srcdoc/;
+  for (const module of importGraph('js/app.js')) {
+    assert.ok(!SINKS.test(code(read(module))),
+      `${module}: header content must only ever be set via textContent`);
+  }
+});
+
+test('the zero-dependency claim is enforced, not merely true today', () => {
+  const pkg = JSON.parse(read('package.json'));
+  for (const field of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
+    assert.equal(pkg[field], undefined, `package.json declares ${field}`);
+  }
+  for (const lockfile of ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'npm-shrinkwrap.json']) {
+    assert.ok(!existsSync(join(ROOT, lockfile)), `${lockfile} exists, so something is being installed`);
+  }
+
+  // The tooling and the tests are held to it too — they are the likeliest place
+  // for a convenience dependency to appear.
+  for (const entry of ['bin/kuvertii.js', 'tools/build-blocklist.mjs', 'tools/build-psl.mjs', 'tools/serve.mjs']) {
+    importGraph(entry);
+  }
 });

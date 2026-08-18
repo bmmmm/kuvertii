@@ -151,8 +151,18 @@ function run() {
     const { card, list } = renderFinding(finding);
     results.append(card);
     if (finding.hostsToCheck?.length) {
-      appendBlocklistVerdict(list, finding.hostsToCheck).catch(() => {
-        /* rendered inline as unavailable */
+      appendBlocklistVerdict(list, finding.hostsToCheck).catch((error) => {
+        // Not "rendered inline as unavailable", which is what the comment here
+        // used to claim. `checkHost` handles a failed *fetch* that way, but a
+        // throw from anywhere else — a malformed `meta.source` reaching a
+        // template literal, say — happens while building the row, before it is
+        // appended. Swallowed, that produced no row, no error and no spinner on
+        // precisely the check the reader was waiting for: a phishing hit.
+        list.append(renderItem({
+          label: 'The blocklist check did not complete',
+          value: `No verdict was reached for this link, so treat it as unchecked rather than clean. (${error.message})`,
+          level: 'caution',
+        }));
       });
     }
   }

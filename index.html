@@ -3,7 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+<!-- `require-trusted-types-for` turns "this page never writes untrusted text to
+     innerHTML" from a rule we keep into one the browser keeps: with no policy
+     allowed, any assignment to a DOM sink throws rather than rendering. It is
+     honoured from a meta element. `frame-ancestors` is not — browsers ignore it
+     here and say so in the console — and GitHub Pages cannot send headers, so it
+     is kept for correctness on any host that can, and not counted on. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types 'none'">
 <title>kuvertii — read what an email header says about you</title>
 <meta name="description" content="Paste an email header and see what it reveals: who it was really addressed to, how that address was hidden, and where the unsubscribe link actually leads. Runs entirely in your browser.">
 <link rel="stylesheet" href="css/style.css">
@@ -64,6 +70,7 @@
 <footer class="colophon">
   <p><strong>Nothing you paste leaves this page.</strong> There is no server, no analytics and no storage — not even <code>localStorage</code>. The header lives in one variable and is gone when you close the tab. A Content-Security-Policy in the page source blocks every outbound request, so this is enforced by your browser rather than promised by us. Turn off your network and it still works.</p>
   <p>The phishing blocklist is a snapshot of <a href="https://github.com/mitchellkrogza/Phishing.Database" rel="noopener noreferrer">Phishing.Database</a> (MIT), baked in at build time and served from this origin — the domain you check is never sent anywhere. A hit is a warning; a miss is not an all-clear.</p>
+  <p>Saving this page and opening it from your disk will not work: browsers fetch ES modules over CORS, and a <code>file://</code> page has no origin to grant. Serve the directory instead — <code>node tools/serve.mjs</code> — or use the terminal version, which needs no browser at all.</p>
   <p><a href="https://github.com/bmmmm/kuvertii" rel="noopener noreferrer">Source</a> · GPL-3.0-or-later</p>
 </footer>
 

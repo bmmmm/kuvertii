@@ -215,6 +215,11 @@ function promoteLeadingSender(headers) {
   if (!/^[^<>@]*<[^<>@\s]+@[^<>@\s]+\.[A-Za-z]{2,}>$/.test(candidate.value.trim())) {
     return headers;
   }
+  // A colon before the address means the line carried a field name we did not
+  // recognise — `X Foo: PayPal Security <security@paypal.com>` — and promoting
+  // that to From lets a sender put any name they like where the reader expects
+  // the one the message actually claims.
+  if (/^[^<]*:/.test(candidate.raw ?? candidate.value)) return headers;
 
   headers[index] = { ...candidate, name: 'From', synthetic: false, inferred: true };
   return headers;

@@ -11,6 +11,16 @@ unsubscribe can be attributed back to you.
 
 ## What it finds
 
+- **Whether the header is trying to control the program reading it.** A `List-ID`
+  can carry the escape sequence that writes your clipboard, a `X-Mailer` the one
+  that turns text into a clickable link, and a bidi override can make a hostname
+  whose bytes read `evil` display as somebody else's. All of it is rendered
+  inert and none of it is deleted — no sender writes these by accident, so the
+  attempt is itself the finding.
+- **Whether the header contradicts itself.** Fields that may appear once, appearing
+  twice; and a line like `De:` — a valid optional header no client displays —
+  placed above the real `From:` so that whichever program reads first sees a
+  different sender.
 - **Whether you pasted the whole header.** A fragment does not fail loudly — it
   analyses fine and quietly answers a narrower question than you asked. When the
   fields every delivered message carries are absent, that is said first, before
@@ -44,7 +54,17 @@ unsubscribe can be attributed back to you.
   whether a server may send for a domain. They never ask whether the mail is
   honest. Spam passes all three every day — and a signature can pass while
   covering only the first few hundred bytes of the message, leaving the rest
-  free to be rewritten by anyone.
+  free to be rewritten by anyone. Every result word each mechanism can produce
+  gets its own sentence, because `spf=neutral` is a domain declining to assert
+  and `spf=permerror` is a fault in that domain's own published record; a single
+  description per mechanism reads as the pass case and states the opposite on a
+  message that failed.
+- **What Microsoft actually decided,** which is no longer the spam score. On a
+  cloud mailbox `SCL` decides nothing — the threat category does, and
+  `compauth`/`reason` record the identity verdict. `reason=010` means someone
+  outside wrote as though they were a colleague. Verdicts that mean *filtering
+  was skipped* — a safe-senders entry, an IP allow list, a mail flow rule — are
+  surfaced as such rather than read as a clean bill.
 - **The route it took.** Read bottom-up, the first hop is the machine that
   generated the message — frequently an API injection from a datacentre rather
   than the brand on the envelope. Where that hop names itself with an encoded
@@ -66,7 +86,17 @@ Nothing you paste leaves the page.
 - No server, no analytics, no storage — not `localStorage`, not `sessionStorage`,
   no cookies. The header lives in one variable and is gone when the tab closes.
 - A `Content-Security-Policy` in the page blocks every outbound request, so this
-  is enforced by your browser rather than promised by the author.
+  is enforced by your browser rather than promised by the author. It also sets
+  `require-trusted-types-for`, which makes any assignment of header text to a
+  markup sink throw rather than render — the no-innerHTML rule becomes the
+  browser's to keep rather than ours. (One directive in that policy does
+  nothing: `frame-ancestors` is ignored when delivered in a `<meta>` element,
+  and GitHub Pages cannot send headers. It is kept for any host that can, and
+  not counted on.)
+- Text taken from the header is stripped of characters that are instructions
+  rather than text — terminal escapes, and the bidi overrides that would let a
+  hostname reading `evil` be displayed as somebody else's. Their presence is
+  reported as a finding, because no sender writes them by accident.
 - **Verify it yourself:** load the page, turn off your network, and analyse a
   header. It works. Or watch the network tab — the only request after load is
   the blocklist asset, from this same origin.
@@ -83,6 +113,12 @@ Read the results asymmetrically, because the data is asymmetric:
 
 - **A hit is a strong warning.** (Though ~1 in 200 lookups is a false alarm, by
   design — that is the price of shipping 390,000 domains in 530 KB.)
+- The builder refuses any entry that would tar more than itself. A lookup walks
+  up the labels, so one feed line reading `co.uk` or `google.com` would flag
+  every domain beneath it; public suffixes are rejected against the Public
+  Suffix List and a short list of major providers by name. It also refuses a
+  build that has changed size by more than a factor of two, in either
+  direction, and records the sha256 of the feed it read.
 - **A miss is not an all-clear.** The snapshot is a point-in-time copy and
   phishing domains are often only hours old. The dangerous ones are precisely
   those no list has caught yet.
@@ -96,10 +132,35 @@ contains your recipient id.
 The same analysis, rendered for a terminal:
 
 ```sh
-kuvertii                     # press space to read the clipboard, q to quit
-kuvertii message.eml         # a header file or a whole .eml
-pbpaste | kuvertii           # or anything else on stdin
+node bin/kuvertii.js         # press space to read the clipboard, q to quit
+node bin/kuvertii.js mail.eml   # a header file or a whole .eml
+pbpaste | node bin/kuvertii.js  # or anything else on stdin
 ```
+
+There is nothing to install. `npm link` puts it on your PATH as `kuvertii` if
+you would rather type that; the package declares no dependencies and has no
+lockfile, so nothing is fetched either way.
+
+### Running it sandboxed
+
+For a header you actively distrust, Node will enforce the privacy claim rather
+than leaving it to us:
+
+```sh
+node --permission --allow-fs-read=. --allow-fs-read=mail.eml bin/kuvertii.js mail.eml
+```
+
+Under `--permission` the runtime denies network access, filesystem writes and
+subprocesses unless each is granted. Measured on Node 26: a `fetch()` from
+inside the process fails with `ERR_ACCESS_DENIED`, which turns "nothing leaves
+this machine" from a design claim into one the runtime enforces. The file and
+stdin modes need nothing else.
+
+The interactive clipboard mode is the exception: reading the clipboard means
+running `pbpaste` or `wl-paste`, so it needs `--allow-child-process`, and an
+allowed child inherits none of the parent's restrictions. That is a real
+weakening and worth naming rather than papering over — use the file or stdin
+mode when it matters.
 
 Input never comes from a line prompt. A header is folded, indentation-sensitive
 and routinely tens of kilobytes, which is precisely what a prompt mangles —
@@ -162,10 +223,17 @@ No build step, no dependencies. Node is used only to run the tests and to bake
 the blocklist.
 
 ```sh
-node --test                          # 127 tests, stdlib only
+node --test                          # 191 tests, stdlib only
 node tools/build-blocklist.mjs       # writes data/ (gitignored, built in CI)
-python3 -m http.server 8000          # then open localhost:8000
+node tools/build-psl.mjs             # refreshes js/psl.js (committed)
+node tools/serve.mjs                 # then open 127.0.0.1:8000
 ```
+
+The dev server is twenty lines of `node:http` rather than `python3 -m
+http.server`, which binds to every interface by default, lists directories, and
+has no notion of a file it should not serve — in this repository that means it
+hands out `.git/config` and `samples/` to the local network. This one is
+loopback-only and serves an allowlist.
 
 `tools/build-blocklist.mjs` also accepts a path to an already-downloaded feed,
 so the build can be reproduced and inspected without network access.

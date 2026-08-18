@@ -65,6 +65,18 @@ function publicSuffixLength(labels) {
 }
 
 /**
+ * Is the whole of this name a public suffix, with no registrant below it?
+ *
+ * `co.uk` and `github.io` are; `paypal.com` is not. Used by the blocklist
+ * builder, where such a name entering the filter would tar every domain beneath
+ * it — the lookup walks up the labels, so one bad line covers a whole registry.
+ */
+export function isPublicSuffix(host) {
+  const labels = String(host ?? '').toLowerCase().replace(/\.$/, '').split('.');
+  return publicSuffixLength(labels) >= labels.length;
+}
+
+/**
  * Registrable domain (eTLD+1) — the boundary between two parties.
  *
  * A name that is itself a public suffix, or shorter than one, is returned whole:

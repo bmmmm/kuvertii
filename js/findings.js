@@ -775,6 +775,12 @@ function replyToFinding(headers) {
   const replyTo = get(headers, 'reply-to');
   if (!replyTo) return null;
 
+  // Set by js/unfold.js when there was no From field and an unlabelled line at
+  // the top of the paste was read as one.
+  const fromInferred = Boolean(
+    headers.find((h) => h.name.toLowerCase() === 'from')?.inferred,
+  );
+
   const fromAddress = findAddresses(from)[0];
   const replyAddress = findAddresses(replyTo)[0];
   if (!fromAddress || !replyAddress || fromAddress === replyAddress) return null;
@@ -789,7 +795,16 @@ function replyToFinding(headers) {
     tone: 'alert',
     lede: 'The visible sender and the address that receives replies are on unrelated domains. Sometimes that is a mailing platform doing its job — and sometimes it is the entire trick, because the reply is the part a filter never sees.',
     items: [
-      { label: 'Appears to be from', value: `${fromAddress}  (${fromDomain})` },
+      {
+        label: fromInferred ? 'Appears to be from (inferred)' : 'Appears to be from',
+        value: `${fromAddress}  (${fromDomain})`,
+        // The `inferred` flag has existed in js/unfold.js since the promotion
+        // was written and was read by nothing. A sender the parser guessed at,
+        // presented as one the message stated, is the wrong kind of confident.
+        note: fromInferred
+          ? 'No From field was present. This was taken from an unlabelled line at the top of the paste, the way a mail client prints the sender above the header block — so it is this tool\'s reading, not the message\'s claim.'
+          : null,
+      },
       { label: 'Replies actually reach', value: `${replyAddress}  (${replyDomain})`, emphasis: true },
     ],
   };

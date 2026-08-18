@@ -170,3 +170,40 @@ test('a field that may appear once is reported when it appears twice', () => {
   assert.match(findings[0].title, /twice/i);
   assert.match(JSON.stringify(findings[0]), /from appears 2 times/);
 });
+
+test('a labelled line is not promoted to From', () => {
+  // Mail clients print the sender above the header block without a label, which
+  // is what the promotion exists for. A line that *does* carry a label — one
+  // this parser simply did not recognise — is not that, and promoting it lets a
+  // sender put any name they like where the reader expects the stated one.
+  const headers = parseHeaders('X Foo: PayPal Security <security@paypal.com>\nTo: you@example.org\n');
+  assert.equal(get(headers, 'from'), '');
+});
+
+test('an inferred sender is labelled as inferred', () => {
+  // The flag has existed since the promotion was written and was read by
+  // nothing, so a guess was presented with the same confidence as a fact.
+  const headers = parseHeaders([
+    'PayPal Security <security@paypal.com>',
+    'Reply-To: refunds@attacker-mail.example',
+    'To: you@example.org',
+  ].join('\n'));
+
+  const finding = analyse(headers).find((f) => f.id === 'reply-to');
+  const row = finding.items.find((i) => /Appears to be from/.test(i.label));
+  assert.match(row.label, /inferred/);
+  assert.match(row.note, /not the message/i);
+});
+
+test('a stated sender carries no such qualification', () => {
+  const headers = parseHeaders([
+    'From: PayPal Security <security@paypal.com>',
+    'Reply-To: refunds@attacker-mail.example',
+    'To: you@example.org',
+  ].join('\n'));
+
+  const row = analyse(headers).find((f) => f.id === 'reply-to')
+    .items.find((i) => /Appears to be from/.test(i.label));
+  assert.doesNotMatch(row.label, /inferred/);
+  assert.equal(row.note, null);
+});
