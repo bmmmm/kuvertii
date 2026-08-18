@@ -235,3 +235,23 @@ test('the page assigns only the four node properties it has decided about', () =
     assert.ok(ALLOWED.has(property), `js/app.js assigns .${property}, which is not on the list`);
   }
 });
+
+test('the walk sees a module however its import is written', () => {
+  // Several gates now rest on the import walk, so a spelling it cannot see is a
+  // module nothing checks. The first widened version required a single space
+  // and single quotes: `import {x} from "./a.js"` and `await import('./a.js')`
+  // were both invisible, which is the hand-kept-list failure again, one level
+  // up. Asserted against the pattern itself, since no module in this repo is
+  // written in the spellings that were being missed.
+  const graph = read('test/graph.js');
+  const pattern = new RegExp(graph.match(/const SPECIFIER = \/(.+)\/g;/)[1], 'g');
+
+  const seen = (line) => [...line.matchAll(pattern)].map(([, spec]) => spec);
+
+  assert.deepEqual(seen("import { x } from './a.js';"), ['./a.js']);
+  assert.deepEqual(seen('import { x } from "./a.js";'), ['./a.js'], 'double quotes');
+  assert.deepEqual(seen("import  {x}  from  './a.js';"), ['./a.js'], 'any spacing');
+  assert.deepEqual(seen("const m = await import('./a.js');"), ['./a.js'], 'dynamic import');
+  assert.deepEqual(seen("export { x } from './a.js';"), ['./a.js'], 're-export');
+  assert.deepEqual(seen('// import the thing we do not do'), [], 'prose is not an import');
+});

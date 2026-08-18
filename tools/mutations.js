@@ -177,8 +177,8 @@ function neutraliseDisabledByMutation(text) {
     id: 'chunk-is-one-key',
     promise: 'Two keys arriving in one read are two keys.',
     file: 'js/keys.js',
-    find: `  return [...String(chunk ?? '').replace(PASTE, '')];`,
-    replace: `  return [String(chunk ?? '')];`,
+    find: `      return [...typed];`,
+    replace: `      return [String(chunk ?? '')];`,
     mustKill: [
       'two keys arriving together are two keys',
       'pasted text is data, not a burst of keypresses',
@@ -361,6 +361,42 @@ function neutraliseDisabledByMutation(text) {
     // A decoder returns the whole value with one part changed, so plaintext
     // beside an encoded token rode along and was reported as recoverable only
     // by decoding.
+  },
+
+  {
+    id: 'paste-state-forgotten',
+    promise: 'A paste split across reads is still a paste.',
+    file: 'js/keys.js',
+    find: `          if (end === -1) return [...typed]; // the paste continues into the next read`,
+    replace: `          if (end === -1) { pasting = false; return [...typed]; }`,
+    mustKill: ['a paste split across reads stays a paste'],
+  },
+
+  {
+    id: 'keys-after-quit',
+    promise: 'No key after the decision to leave is acted on.',
+    file: 'js/keys.js',
+    find: `    if (isQuit(key)) break;`,
+    replace: "",
+    mustKill: ['nothing after the quit key is handed on'],
+  },
+
+  {
+    id: 'unbalanced-comment-eats-the-clause',
+    promise: 'A comment that never closes is not a comment.',
+    file: 'js/findings.js',
+    find: `  return depth === 0 ? out : text;`,
+    replace: `  return out;`,
+    mustKill: ['an unbalanced parenthesis does not erase the receiving server'],
+  },
+
+  {
+    id: 'import-walk-one-spelling',
+    promise: 'The walk sees every way a module can be named.',
+    file: 'test/graph.js',
+    find: "const SPECIFIER = /\\b(?:from|import)\\s*\\(?\\s*['\"]([^'\"\\n]{1,200})['\"]/g;",
+    replace: "const SPECIFIER = /(?:from|import) '([^']+)'/g;",
+    mustKill: ['the walk sees a module however its import is written'],
   },
 
   // ------------------------------------------------- promises with no gate yet

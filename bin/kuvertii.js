@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { lookup, validate, verdictRows } from '../js/snapshot.js';
 import { clearClipboard, readClipboard } from '../js/clipboard.js';
 import { analyse } from '../js/findings.js';
-import { isQuit, keypresses } from '../js/keys.js';
+import { createKeyReader, isQuit, untilQuit } from '../js/keys.js';
 import { createRenderer } from '../js/terminal.js';
 import { MAX_HEADER_BYTES, readHeaders, skippedNote } from '../js/unfold.js';
 
@@ -211,8 +211,15 @@ async function interactive(renderer, { wipe }) {
     // or one arriving while the loop is busy. Comparing the whole chunk against
     // a single character dropped every key in it when that happened, q
     // included, and q is the only documented way out.
+    //
+    // The `quitting` check is the other half of that. Resolving the promise does
+    // not stop a loop already running, so `q ` — quit, then a space — quit and
+    // then went on to read the clipboard and empty it, after the reader had
+    // said they were done. A key that arrives after the decision to leave is
+    // not a key anybody pressed on purpose.
+    const keys = createKeyReader();
     stdin.on('data', async (chunk) => {
-      for (const key of keypresses(chunk)) await handle(key);
+      for (const key of untilQuit(keys.read(chunk))) await handle(key);
     });
   });
 }

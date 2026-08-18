@@ -1570,7 +1570,12 @@ function withoutComments(text) {
     if (ch === ')') { depth = Math.max(0, depth - 1); out += ' '; continue; }
     if (!depth) out += ch;
   }
-  return out;
+  // An unterminated comment swallows everything after it, and the sender writes
+  // this line. One stray '(' erased the receiving server and the protocol from
+  // the route card — `from evil.example` and nothing else, no `by`, no
+  // encryption verdict. A comment that does not close is not a comment; read
+  // the line as written rather than reporting a hop that has no destination.
+  return depth === 0 ? out : text;
 }
 
 /**

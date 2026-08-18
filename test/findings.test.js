@@ -900,3 +900,22 @@ test('an address written in the open is never called a hidden one', () => {
   assert.doesNotMatch(finding.lede, /appears \d+ more time/, 'and the count is not inflated');
   assert.doesNotMatch(text(finding), /Carried \d+ further time/);
 });
+
+test('an unbalanced parenthesis does not erase the receiving server', () => {
+  // Comments are stripped before the clause is read, and an unterminated one
+  // swallowed everything after it — so a single stray `(`, written by whoever
+  // sent the message, removed the `by` host and the protocol from the route
+  // card. The hop rendered as an origin with no destination and no encryption
+  // verdict at all. A comment that never closes is not a comment.
+  const finding = analyse(parseHeaders([
+    'From: a@b.example',
+    'Received: from evil.example (unterminated by mx.bank.example with ESMTPS;',
+    '        Mon, 17 Aug 2026 10:00:00 +0000',
+  ].join('\n'))).find((f) => f.id === 'route');
+
+  // The finding value, not the rendered line: defanging happens in the
+  // renderers, so a finding-level test that expects brackets is testing the
+  // wrong layer — as the first version of this one was.
+  assert.match(finding.items[0].value, /mx\.bank\.example/, 'the receiving server survives');
+  assert.match(finding.items[0].value, /ESMTPS/, 'and so does the protocol');
+});

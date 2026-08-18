@@ -43,13 +43,30 @@ export function code(source) {
  * omits what it could not resolve reports a smaller, cleaner repository than
  * the one that exists.
  */
+// Every spelling a module can be named in: single or double quotes, any
+// spacing, and the parenthesis of a dynamic import. Bounded to one line,
+// because a specifier is never longer than one and an unbounded group ran
+// across half a file looking for its closing quote.
+const SPECIFIER = /\b(?:from|import)\s*\(?\s*['"]([^'"\n]{1,200})['"]/g;
+
 export function importGraph(entry) {
   const seen = new Set();
 
   const walk = (module) => {
     if (seen.has(module)) return;
     seen.add(module);
-    for (const [, spec] of read(module).matchAll(/(?:from|import) '([^']+)'/g)) {
+    // Every spelling, because a walk that misses one is a list again — and
+    // this walk is what several gates now rest on. The old pattern required a
+    // single space and single quotes, so `import {x} from "./a.js"` and
+    // `await import('./a.js')` were both invisible: a module could be loaded by
+    // the page and checked by nothing, which is the exact defect the walk
+    // replaced, one level up.
+    for (const [, spec] of read(module).matchAll(SPECIFIER)) {
+      // A module specifier never contains whitespace. Without that check the
+      // widened pattern reaches into prose and regex literals — the first
+      // version reported that js/unfold.js imports \`)) return headers;\`,
+      // because the specifier group ran across newlines to the next quote.
+      if (/\s/.test(spec)) continue;
       assert.ok(
         spec.startsWith('.') || spec.startsWith('node:'),
         `${module} imports ${spec}, which is neither a relative path nor Node stdlib`,

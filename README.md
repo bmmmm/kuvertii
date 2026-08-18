@@ -238,7 +238,7 @@ No build step, no dependencies. Node is used only to run the tests and to bake
 the blocklist.
 
 ```sh
-node --test                          # 232 tests, stdlib only
+node --test                          # 258 tests, stdlib only
 node tools/mutate.mjs                # breaks each promise, checks the suite notices
 node tools/build-blocklist.mjs       # writes data/ (gitignored, built in CI)
 node tools/build-psl.mjs             # refreshes js/psl.js (committed)
