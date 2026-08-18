@@ -245,11 +245,14 @@ function neutraliseDisabledByMutation(text) {
 }
 
 export function identifySender(`,
-    mustKill: ['the CLI reaches for nothing that could open a link'],
-    // test/terminal.test.js:164 reads a hand-written list of five files.
-    // js/senders.js is one of the eight modules the CLI loads that are not on
-    // it, and the CLI has no CSP underneath to catch what the test misses.
-    expectedToSurvive: true,
+    mustKill: [
+      'nothing the command loads can reach the network',
+      'the page reaches only for its own two static assets',
+    ],
+    // Was a known gap until test/network.test.js replaced the hand-written list
+    // of five filenames with a walk of both import graphs. js/senders.js is one
+    // of the ten modules that list never covered, and the CLI has no CSP
+    // underneath to catch what a test misses.
   },
 
   {
@@ -266,11 +269,12 @@ export function identifySender(`,
 
 function el(tag, className, text) {
   const node = document.createElement(tag);`,
-    mustKill: ['untrusted header text never reaches a markup sink'],
-    // The SINKS regex in test/wiring.test.js:143 bans setAttribute but not
-    // property assignment, so `link.href = …` is invisible to it. In the
-    // terminal this rule has a real gate (defang); on the page it has none.
-    expectedToSurvive: true,
+    mustKill: ['the page assigns only the four node properties it has decided about'],
+    // Was a known gap: the sink regex banned the names somebody thought of and
+    // not property assignment, so `link.href = …` was invisible to it. The
+    // check now runs the other way — four allowed properties, anything else
+    // fails — because the list of ways to reach the DOM is the platform's and
+    // grows, while the list this page needs is ours and is four items long.
   },
 
   {
@@ -279,10 +283,10 @@ function el(tag, className, text) {
     file: 'js/app.js',
     find: `if (text !== undefined && text !== null) node.textContent = neutralise(text);`,
     replace: `if (text !== undefined && text !== null) node.textContent = String(text);`,
-    mustKill: ['untrusted header text never reaches a markup sink'],
-    // Every escape-stripping test in the suite drives the terminal renderer.
-    // The browser's single call site can be deleted and nothing notices.
-    expectedToSurvive: true,
+    mustKill: ['no hostile byte from a header reaches the page'],
+    // Was a known gap: every escape-stripping test drove the terminal renderer,
+    // so the browser's single call site could be deleted with the whole suite
+    // green. test/app.test.js now asks the DOM the same question.
   },
 
   {
@@ -292,22 +296,23 @@ function el(tag, className, text) {
     find: `connect-src 'self';`,
     replace: `connect-src 'self' https:;`,
     mustKill: ['the CSP allows the page to work and nothing beyond it'],
-    // A CSP scheme-source has no slashes, so it matches neither the wildcard
-    // check nor the `https://host` check in test/wiring.test.js:113. The page
-    // could fetch the pasted address to anywhere on the web with CI green.
-    expectedToSurvive: true,
+    // Was a known gap. A scheme-source has no slashes, so it matched neither
+    // the wildcard check nor the `https://host` check the old test made — the
+    // page could have sent a pasted address anywhere on the web with CI green.
+    // The policy is now parsed and every source checked against a per-directive
+    // allowlist, so a new source fails until somebody writes down why it belongs.
   },
 
   {
     id: 'serve-public-bind',
     promise: 'The dev server listens on loopback only.',
     file: 'tools/serve.mjs',
-    find: `createDevServer().listen(PORT, '127.0.0.1', () => {`,
-    replace: `createDevServer().listen(PORT, '0.0.0.0', () => {`,
-    mustKill: ['nothing outside the site is reachable, however it is spelled'],
-    // test/serve.test.js exercises the real `resolve`, which is the right
-    // instinct, but the bind address is never asserted at all — the one part of
-    // that file that decides who can reach it.
-    expectedToSurvive: true,
+    find: `export const BIND = '127.0.0.1';`,
+    replace: `export const BIND = '0.0.0.0';`,
+    mustKill: ['the dev server binds loopback only, and is asked rather than read'],
+    // Was a known gap: test/serve.test.js exercised the real `resolve` but never
+    // the bind address — the one part of that file deciding who can reach it.
+    // The test now binds an ephemeral port and asks the socket, because reading
+    // the constant would pass just as happily once `listen` stopped using it.
   },
 ];

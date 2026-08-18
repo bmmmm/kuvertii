@@ -24,6 +24,13 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.argv[2] ?? 8000);
 
+// Loopback, and exported so a test can bind it for real rather than read it
+// out of the source. This server exists to serve a page whose whole claim is
+// that nothing leaves the machine; listening on 0.0.0.0 would put a header
+// paste and a phishing blocklist on the local network of whichever café the
+// laptop is in. It was the one line of this file nothing asserted.
+export const BIND = '127.0.0.1';
+
 // What the published site consists of. Everything else in the repository —
 // tests, tooling, package metadata, the git directory — is not part of the page
 // and has no reason to be reachable from it.
@@ -132,7 +139,7 @@ export function createDevServer() {
 // real path rules rather than a copy of them, and importing it must not open a
 // socket.
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  createDevServer().listen(PORT, '127.0.0.1', () => {
-    process.stdout.write(`kuvertii on http://127.0.0.1:${PORT}/  (loopback only, ctrl-c to stop)\n`);
+  createDevServer().listen(PORT, BIND, () => {
+    process.stdout.write(`kuvertii on http://${BIND}:${PORT}/  (loopback only, ctrl-c to stop)\n`);
   });
 }

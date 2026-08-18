@@ -156,22 +156,6 @@ test('wrapping respects the given width', () => {
   }
 });
 
-test('the CLI reaches for nothing that could open a link', async () => {
-  // The header analysis resolves redirects by decoding, never by fetching.
-  // In a browser the CSP enforces that; here it has to be a test, and the
-  // temptation is real, since a HEAD request would resolve a destination more
-  // reliably than decoding does.
-  const sources = await Promise.all(
-    ['bin/kuvertii.js', 'js/terminal.js', 'js/clipboard.js', 'js/findings.js', 'js/links.js']
-      .map((path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8')),
-  );
-  for (const source of sources) {
-    assert.doesNotMatch(source, /\bfetch\s*\(/, 'no fetch');
-    assert.doesNotMatch(source, /node:(https?|net|dns)\b/, 'no network module');
-    assert.doesNotMatch(source, /\brequire\(['"](https?|net|dns)['"]\)/, 'no network require');
-    assert.doesNotMatch(source, /\bopen\b.*\bbrowser\b/i, 'nothing that opens a browser');
-  }
-});
 
 test('a scheme is broken wherever it appears, not only at a word boundary', () => {
   // The bypass this closes: `\b` needs a non-word character on one side, and an

@@ -85,8 +85,12 @@ Nothing you paste leaves the page.
 
 - No server, no analytics, no storage — not `localStorage`, not `sessionStorage`,
   no cookies. The header lives in one variable and is gone when the tab closes.
-- A `Content-Security-Policy` in the page blocks every outbound request, so this
-  is enforced by your browser rather than promised by the author. It also sets
+- A `Content-Security-Policy` in the page allows exactly one destination — this
+  origin, for the blocklist asset — and denies everything else by default, so
+  this is enforced by your browser rather than promised by the author. Every
+  source in that policy is checked against a per-directive allowlist in the
+  tests, because the previous check looked for wildcards and third-party hosts
+  and would have accepted `connect-src 'self' https:`, which permits the web. It also sets
   `require-trusted-types-for`, which makes any assignment of header text to a
   markup sink throw rather than render — the no-innerHTML rule becomes the
   browser's to keep rather than ours. (One directive in that policy does
@@ -111,8 +115,14 @@ your browser, not the other way round.
 
 Read the results asymmetrically, because the data is asymmetric:
 
-- **A hit is a strong warning.** (Though ~1 in 200 lookups is a false alarm, by
-  design — that is the price of shipping 390,000 domains in 530 KB.)
+- **A hit is a strong warning** — but a false alarm is likelier than the
+  headline figure suggests, and the tool now says so beside each hit. The
+  designed rate, ~1 in 200, is the rate of a single Bloom probe; a lookup walks
+  up the labels and makes one probe per boundary. Measured against the shipped
+  filter with 200,000 clean hosts per depth: 1 in 193 for a two-label name, 1 in
+  96 for three, **1 in 65 for four** — which is the shape of the ESP click
+  trackers this check is usually pointed at. That is the price of shipping
+  390,000 domains in 530 KB.
 - The builder refuses any entry that would tar more than itself. A lookup walks
   up the labels, so one feed line reading `co.uk` or `google.com` would flag
   every domain beneath it; public suffixes are rejected against the Public
@@ -177,7 +187,8 @@ harmless.
 
 Redirects are still resolved by decoding the link, never by requesting it. A
 `HEAD` request would resolve them more reliably, and that is exactly why there
-is a test asserting no module here can reach the network: following the link
+is a test walking both import graphs and asserting that no module either build
+loads can reach the network: following the link
 would report your click to the tracker and confirm your address to a phisher.
 
 ### About emptying the clipboard
@@ -223,7 +234,8 @@ No build step, no dependencies. Node is used only to run the tests and to bake
 the blocklist.
 
 ```sh
-node --test                          # 191 tests, stdlib only
+node --test                          # 232 tests, stdlib only
+node tools/mutate.mjs                # breaks each promise, checks the suite notices
 node tools/build-blocklist.mjs       # writes data/ (gitignored, built in CI)
 node tools/build-psl.mjs             # refreshes js/psl.js (committed)
 node tools/serve.mjs                 # then open 127.0.0.1:8000

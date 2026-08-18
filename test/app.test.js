@@ -166,3 +166,59 @@ test('a decoded payload cannot forge a row in either renderer', async () => {
     'and it is the block carrying the forgery',
   );
 });
+
+test('no hostile byte from a header reaches the page', async () => {
+  // Every escape-stripping test in this suite drove the terminal renderer. The
+  // page has its own call to `neutralise`, at a single site, and that site could
+  // be deleted with all 224 other tests still green — so the browser half of
+  // the project's headline safety claim was ungated on the page it is written
+  // about. This is the same question test/hostile.test.js asks of the terminal,
+  // asked of the DOM instead.
+  const cp = (n) => String.fromCodePoint(n);
+  const HOSTILE = /(?![\t\n])[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}]/u;
+
+  const header = [
+    'From: Support <support@sender.example>',
+    'To: reader@example.org',
+    'Date: Mon, 1 Jan 2026 00:00:00 +0000',
+    'Message-ID: <abc@sender.example>',
+    `List-ID: ${cp(0x1b)}]52;c;cm0gLXJmIH4=${cp(0x07)}seg <l.sender.example>`,
+    `X-Mailer: Out${cp(0x200b)}look ${cp(0x2066)}spoofed${cp(0x2069)}`,
+    `X-Campaign: paypal-${cp(0x202e)}moc.live`,
+    `X-Note: erase${cp(0x9b)}2J and hide${cp(0x9b)}8m`,
+  ].join('\n');
+
+  const nodes = await loadApp();
+  nodes['#header-input'].value = header;
+  for (const handler of nodes['#analyse'].handlers.click) handler();
+
+  const shown = renderedText(nodes['#results']);
+  assert.ok(shown.length > 0, 'something was rendered at all');
+  assert.doesNotMatch(shown, HOSTILE, 'a control or format character reached the page');
+  assert.match(shown, /instructions, not just text/, 'and the attempt is reported, not silently cleaned');
+});
+
+test('no live URL reaches the page either', async () => {
+  // The terminal defangs because terminals linkify plain text. A browser does
+  // not linkify textContent, so the page has never needed defanging — but it
+  // must still never construct a link, and the value it shows must be the one
+  // the analysis decoded rather than a clickable version of it.
+  const nodes = await loadApp();
+  nodes['#header-input'].value = [
+    'From: Shop <news@shop.example>',
+    'To: reader@example.org',
+    'Date: Mon, 1 Jan 2026 00:00:00 +0000',
+    'Message-ID: <abc@shop.example>',
+    'List-Unsubscribe: <https://u1.ct.sendgrid.net/ls/click?upn=abcdef>',
+  ].join('\n');
+  for (const handler of nodes['#analyse'].handlers.click) handler();
+
+  const anchors = [];
+  const walk = (node) => {
+    if (node.tag === 'a') anchors.push(node);
+    node.children.forEach(walk);
+  };
+  walk(nodes['#results']);
+
+  assert.deepEqual(anchors, [], 'the page built an anchor out of header text');
+});

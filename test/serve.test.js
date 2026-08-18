@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { CSP, resolve } from '../tools/serve.mjs';
+import { BIND, CSP, createDevServer, resolve } from '../tools/serve.mjs';
 
 const served = (path) => resolve(path) !== null;
 
@@ -72,4 +72,29 @@ test('the served policy is the page policy, plus what a header can carry', () =>
   assert.match(CSP, /default-src 'none'/);
   assert.match(CSP, /frame-ancestors 'none'/);
   assert.match(CSP, /require-trusted-types-for 'script'/);
+});
+
+test('the dev server binds loopback only, and is asked rather than read', async () => {
+  // The one line of tools/serve.mjs nothing asserted, and the one that decides
+  // who can reach it. This server hands out a page whose entire claim is that
+  // nothing leaves the machine; on 0.0.0.0 it would offer a header paste and a
+  // phishing blocklist to whatever network the laptop is on.
+  //
+  // Bound for real on an ephemeral port rather than compared against the source
+  // text, because a test that reads the constant passes just as happily when
+  // the constant has stopped being the thing `listen` is handed.
+  const server = createDevServer();
+
+  await new Promise((done, fail) => {
+    server.once('error', fail);
+    server.listen(0, BIND, done);
+  });
+
+  try {
+    const address = server.address();
+    assert.equal(address.address, '127.0.0.1', `bound to ${address.address}`);
+    assert.notEqual(address.address, '0.0.0.0');
+  } finally {
+    await new Promise((done) => server.close(done));
+  }
 });

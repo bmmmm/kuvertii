@@ -99,19 +99,59 @@ test('the fetch targets match what the build script writes', () => {
 });
 
 test('the CSP allows the page to work and nothing beyond it', () => {
+  // Checked as a policy rather than as a string.
+  //
+  // This used to be a handful of negative regexes, and they had the hole every
+  // denylist has: `connect-src 'self' https:` contains no wildcard and no
+  // `//`, so it passed both guards while permitting the page to send a pasted
+  // header to any origin on the web. A scheme-source has no slashes, which is
+  // exactly what the "no third-party origin" check was looking for.
+  //
+  // So every source token is now checked against what that directive is allowed
+  // to contain. Adding anything — a CDN, a font host, an analytics endpoint —
+  // fails here until somebody writes down why it belongs, which is the point.
   const csp = html.match(/Content-Security-Policy" content="([^"]+)"/)?.[1];
   assert.ok(csp, 'a CSP is present');
 
-  // Required for the page to function.
-  assert.match(csp, /script-src 'self'/, 'ES modules must load');
-  assert.match(csp, /connect-src 'self'/, 'the blocklist fetch must be allowed');
+  const policy = Object.fromEntries(
+    csp.split(';').map((part) => part.trim()).filter(Boolean).map((part) => {
+      const [name, ...sources] = part.split(/\s+/);
+      return [name, sources];
+    }),
+  );
 
-  // Required for the privacy claim to hold.
-  assert.match(csp, /default-src 'none'/, 'deny by default');
-  assert.ok(!/connect-src[^;]*\*/.test(csp), 'no wildcard may appear in connect-src');
-  assert.ok(!/'unsafe-inline'/.test(csp), 'inline script would defeat the policy');
-  assert.ok(!/https?:\/\//.test(csp), 'no third-party origin may be allowed');
-  assert.match(csp, /form-action 'none'/, 'nothing may be submitted anywhere');
+  // What each directive may contain, exhaustively. `data:` appears once, for
+  // the inline SVG marks, and nowhere that could carry a request off-origin.
+  const ALLOWED = {
+    'default-src': ["'none'"],
+    'script-src': ["'self'"],
+    'style-src': ["'self'"],
+    'connect-src': ["'self'"],
+    'img-src': ["'self'", 'data:'],
+    'base-uri': ["'none'"],
+    'form-action': ["'none'"],
+    'frame-ancestors': ["'none'"],
+    'require-trusted-types-for': ["'script'"],
+    'trusted-types': ["'none'"],
+  };
+
+  for (const [directive, sources] of Object.entries(policy)) {
+    assert.ok(ALLOWED[directive], `${directive} is not a directive this page has decided about`);
+    for (const source of sources) {
+      assert.ok(
+        ALLOWED[directive].includes(source),
+        `${directive} allows ${source}, which is not on its list`,
+      );
+    }
+  }
+
+  // And the directives that must be present, since an allowlist says nothing
+  // about what is missing: a policy with no connect-src falls back to
+  // default-src, which is fine here, but a policy that dropped default-src
+  // would fall back to nothing at all.
+  for (const required of ['default-src', 'script-src', 'connect-src', 'form-action', 'require-trusted-types-for']) {
+    assert.ok(policy[required], `${required} is missing`);
+  }
 });
 
 test('the page makes no storage calls at all', () => {
@@ -158,5 +198,29 @@ test('the zero-dependency claim is enforced, not merely true today', () => {
   // for a convenience dependency to appear.
   for (const entry of ['bin/kuvertii.js', 'tools/build-blocklist.mjs', 'tools/build-psl.mjs', 'tools/serve.mjs']) {
     importGraph(entry);
+  }
+});
+
+test('the page assigns only the four node properties it has decided about', () => {
+  // The sink check above bans the names somebody thought of — innerHTML,
+  // setAttribute, srcdoc. It did not ban `link.href = value`, because nobody
+  // thought of that one, and an anchor built from header text would have
+  // rendered a phishing destination as a live click target with the whole suite
+  // green. Enumerating dangerous sinks is the wrong shape: the list of ways to
+  // reach the DOM is the platform's and it grows, while the list of properties
+  // this page needs is ours and is four items long.
+  //
+  // So the assertion runs the other way. Anything outside the four fails, and
+  // whoever adds the fifth has to say here what it is for.
+  const ALLOWED = new Set(['className', 'hidden', 'textContent', 'value']);
+  const assigned = new Set();
+
+  for (const [, property] of code(read('js/app.js')).matchAll(/\.\s*([A-Za-z_$][\w$]*)\s*(?:=[^=]|\+=)/g)) {
+    assigned.add(property);
+  }
+
+  assert.ok(assigned.size > 0, 'the scan found nothing, which means it is not scanning');
+  for (const property of assigned) {
+    assert.ok(ALLOWED.has(property), `js/app.js assigns .${property}, which is not on the list`);
   }
 });
