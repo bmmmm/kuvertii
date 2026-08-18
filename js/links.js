@@ -6,15 +6,31 @@
 // structure answers most of the question.
 
 import { clip, readability } from './decode.js';
+import { EXACT, EXCEPTION, WILDCARD } from './psl.js';
 import { identifySender, KIND_LABELS } from './senders.js';
 
-// Approximation of the Public Suffix List — enough to stop `example.co.uk` from
-// being read as `co.uk`. Labelled as approximate wherever it surfaces in the UI.
-const MULTI_PART_SUFFIXES = new Set([
-  'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'me.uk', 'net.uk',
-  'com.au', 'net.au', 'org.au', 'co.nz', 'co.za', 'co.jp', 'or.jp', 'ne.jp',
-  'com.br', 'com.mx', 'com.ar', 'co.in', 'com.cn', 'com.tr', 'com.pl',
-]);
+// Where one organisation's namespace ends and the next begins, from the Public
+// Suffix List, baked in at build time by tools/build-psl.mjs.
+//
+// This used to be a hand-written list of twenty-one suffixes described as an
+// approximation. It was not a safe one. `bank.com.sg` and `evil.com.sg` both
+// reduced to `com.sg`, so a message from a bank with an unsubscribe link on an
+// unrelated domain rendered as `✓ Unsubscribe stays on the sender domain —
+// both are com.sg`. The error only ever ran one way, towards merging two
+// parties into one, which is the direction that turns a warning into a
+// reassurance. There are 8,806 multi-label rules; the list held 21.
+//
+// Both published sections are used, not only ICANN. ICANN alone answers the
+// DMARC organisational-domain question — which registry sold this name — but
+// the question asked here is whether two names belong to the same party, and on
+// a hosting platform that answer is in the PRIVATE section. Without it
+// `alice.github.io` and `evil.github.io` are the same domain, which is the
+// `com.sg` bug again in a different suffix.
+//
+// Not the DNS tree walk that RFC 9989 §4.10 defines for DMARC: that needs up to
+// five DNS queries per evaluation, and this tool does not make queries. The
+// published list is the offline answer to the same question, and that question
+// stays closed.
 
 const IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 
@@ -23,13 +39,42 @@ const UNSUB_PATH_RE = /(unsub|unsubscribe|optout|opt-out|remove|preferences|subs
 // Paths that have no business being behind an unsubscribe link.
 const CREDENTIAL_PATH_RE = /(login|signin|sign-in|verify|validate|confirm-?account|password|secure|billing|payment|invoice|wallet|update-?info)/i;
 
-/** Registrable domain (eTLD+1), approximately. */
+/**
+ * How many trailing labels of `labels` form the public suffix.
+ *
+ * The algorithm published alongside the list: take every matching rule, prefer
+ * an exception over all others, otherwise prefer the one with the most labels.
+ * Scanning from the left tries the longest candidate first, so the first match
+ * is the prevailing rule and the loop can stop there.
+ *
+ * An exception rule (`!www.ck`) is applied by dropping its leftmost label,
+ * which is why it yields one label fewer than it matched. An unmatched name
+ * falls to the default rule `*` — one label — and that is also what stands in
+ * for every single-label rule, since js/psl.js does not ship those.
+ */
+function publicSuffixLength(labels) {
+  for (let i = 0; i < labels.length; i++) {
+    const candidate = labels.slice(i).join('.');
+    if (EXCEPTION.has(candidate)) return labels.length - i - 1;
+    if (EXACT.has(candidate)) return labels.length - i;
+    if (i + 1 < labels.length && WILDCARD.has(labels.slice(i + 1).join('.'))) {
+      return labels.length - i;
+    }
+  }
+  return 1;
+}
+
+/**
+ * Registrable domain (eTLD+1) — the boundary between two parties.
+ *
+ * A name that is itself a public suffix, or shorter than one, is returned whole:
+ * `co.uk` has no registrant to name, and pretending otherwise would invent one.
+ */
 export function registrableDomain(host) {
   const labels = String(host ?? '').toLowerCase().replace(/\.$/, '').split('.');
-  if (labels.length <= 2) return labels.join('.');
-  const lastTwo = labels.slice(-2).join('.');
-  const take = MULTI_PART_SUFFIXES.has(lastTwo) ? 3 : 2;
-  return labels.slice(-take).join('.');
+  const suffix = publicSuffixLength(labels);
+  if (suffix >= labels.length) return labels.join('.');
+  return labels.slice(labels.length - suffix - 1).join('.');
 }
 
 /** Pull every http(s) and mailto URL out of a string. */

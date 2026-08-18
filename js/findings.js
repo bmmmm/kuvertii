@@ -4,6 +4,8 @@
 // from. The tone is dry rather than alarmed: the goal is for someone to
 // understand their own mail, not to be told what to feel about it.
 
+import { hasControls, scanControls } from './control.js';
+import { table } from './lookup.js';
 import { bestDecode, clip, decodeIdentifier, decodeSegments, findAddresses, prettifyNulls } from './decode.js';
 import { extractUrls, inspectUnsubscribeLink, registrableDomain } from './links.js';
 import { microsoftVerdicts } from './microsoft.js';
@@ -48,7 +50,154 @@ export function analyse(headers) {
   push(routeFinding(headers));
   push(judgementFinding(headers));
 
+  // Both are computed last and read first. They qualify every finding above
+  // them — if part of this report was written by the sender rather than derived
+  // from the message, that has to be said before the rest of it is believed.
+  const contradictions = contradictionFinding(headers);
+  if (contradictions) findings.unshift(contradictions);
+
+  // Necessarily after the others exist: the decoders turn values that were
+  // ordinary base64 in the raw header into escape sequences, and those only
+  // become visible once a finding has been built out of them.
+  const controls = controlCharacterFinding(headers, findings);
+  if (controls) findings.unshift(controls);
+
   return findings;
+}
+
+// ---------------------------------------------------------------- contradictions
+
+// RFC 5322 §3.6 permits each of these at most once. A second copy is not a
+// formatting quirk: every one of them is a field some part of this analysis
+// reads by taking the first match, so a duplicate is a way of answering a
+// question before the real field gets to.
+const SINGLETON_FIELDS = ['from', 'reply-to', 'to', 'cc', 'subject', 'date', 'message-id', 'sender'];
+
+/**
+ * Report a header that states the same thing twice, or states it in disguise.
+ *
+ * Two mechanisms, one consequence. A field repeated outright is the plain case.
+ * The subtler one is a localised label — `De:`, `Von:`, `Antwort an:` — which is
+ * a valid optional header that no relay strips and no client displays, and
+ * which this parser used to accept as a translation of the field it names.
+ * Either way the reader is shown one value while the message carries another.
+ */
+function contradictionFinding(headers) {
+  const items = [];
+
+  for (const field of SINGLETON_FIELDS) {
+    const values = getAll(headers, field);
+    if (values.length < 2) continue;
+    items.push({
+      label: `${field} appears ${values.length} times`,
+      value: values.map((v, i) => `${i + 1}. ${clip(v, 120)}`).join('\n'),
+      mono: true,
+      level: 'caution',
+      note: 'A message may carry each of these once. Mail software reading the first copy and mail software reading the last will disagree about who sent this.',
+    });
+  }
+
+  // Set by js/unfold.js when a localised label was displaced by the real field.
+  for (const header of headers.filter((h) => h.aliasOverruled)) {
+    items.push({
+      label: `${header.name} was written as if it were ${header.aliasOverruled}`,
+      value: clip(header.value, 160),
+      level: 'bad',
+      chips: [header.name],
+      note: `The message already carries a real ${header.aliasOverruled}, so this one was ignored. A label that reads as a translation, placed above the field it translates, is how a sender gets a reader to see an address the message does not actually use.`,
+    });
+  }
+
+  if (!items.length) return null;
+
+  return {
+    title: 'This header says the same thing twice',
+    tone: 'alert',
+    lede: 'Fields that may appear only once appear more than once. Which value counts depends on which program is reading, and that is the point of writing it this way.',
+    items,
+  };
+}
+
+// ----------------------------------------------------------- control characters
+
+/** Every string in a finding that came, however indirectly, from the header. */
+function* renderedText(findings) {
+  for (const finding of findings) {
+    for (const item of finding.items ?? []) {
+      yield item.label;
+      yield item.value;
+      if (item.note) yield item.note;
+      for (const chip of item.chips ?? []) yield chip;
+    }
+  }
+}
+
+/**
+ * Report a header carrying characters that are instructions rather than text.
+ *
+ * Both renderers already print these inert — `neutralise` in js/control.js runs
+ * on everything on its way to the screen, so nothing here is load-bearing for
+ * safety. What it is load-bearing for is honesty. A sender who puts `ESC ] 52`
+ * in a `List-ID` is trying to write the reader's clipboard; one who puts U+202E
+ * in a hostname is trying to make the destination read as somebody else's. Both
+ * are findings in their own right, and a tool that quietly cleaned them up
+ * would be withholding the most direct evidence of intent in the whole header.
+ *
+ * Two passes, because there are two ways for these bytes to arrive. The header
+ * fields catch what the sender wrote; the rendered findings catch what this
+ * tool's own decoders produced, since a value of pure `[A-Za-z0-9+/=]` gives no
+ * sign of the escape sequence it unpacks into.
+ */
+function controlCharacterFinding(headers, findings) {
+  const items = [];
+  const seen = new Set();
+
+  for (const header of headers) {
+    if (!hasControls(header.value)) continue;
+    const effects = scanControls(header.value);
+    effects.forEach((effect) => seen.add(effect));
+    items.push({
+      label: `${header.name} contains control characters`,
+      value: `It ${effects.join('; it ')}.`,
+      level: 'bad',
+      chips: [header.name],
+    });
+  }
+
+  // Anything the decoders unpacked. Reported as one row rather than per field:
+  // the reader has already been told which fields were decoded, and the point
+  // here is that the encoding was hiding this, not where it sat.
+  const decoded = [];
+  for (const text of renderedText(findings)) {
+    if (!hasControls(text)) continue;
+    for (const effect of scanControls(text)) {
+      if (!seen.has(effect) && !decoded.includes(effect)) decoded.push(effect);
+    }
+  }
+  if (decoded.length) {
+    items.push({
+      label: 'An encoded value unpacks into control characters',
+      value: `Decoded, it ${decoded.join('; it ')}.`,
+      level: 'bad',
+      note: 'In the raw header this was ordinary-looking base64. The encoding is what kept it out of sight.',
+    });
+  }
+
+  if (!items.length) return null;
+
+  return {
+    title: 'This header carries instructions, not just text',
+    tone: 'alert',
+    lede: 'Some of these fields contain bytes that a terminal obeys as commands and a browser uses to reorder what you see. They are shown inert everywhere below — <1b> was an escape byte, <U+202E> reverses reading direction — so that reading this report cannot act on them.',
+    items: [
+      ...items,
+      {
+        label: 'Nothing puts these here by accident',
+        value: 'Mail software does not emit escape sequences or bidi overrides into header fields. Their presence is a deliberate attempt to control the program that reads this message, which places everything else in this header in doubt.',
+        level: 'caution',
+      },
+    ],
+  };
 }
 
 // -------------------------------------------------------------- completeness
@@ -220,8 +369,11 @@ function recipientFinding(headers) {
     // the @ written as = — `bounce-alice=example.com@sender.example`. The
     // pattern has to require a real domain after the =, otherwise every
     // `key=value` pair in an Authentication-Results line reads as an address.
+    // Bounded, and preceded by a lookbehind, for the reason given at EMAIL_RE
+    // in js/decode.js: an unanchored `+` over a character class the sender
+    // controls the length of is quadratic, and header fields are long.
     for (const [, local, domain] of header.value.matchAll(
-      /([A-Za-z0-9._%+-]+)=([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})@/g,
+      /(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]{1,64})=([A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,10}\.[A-Za-z]{2,24})@/g,
     )) {
       const stripped = `${stripBouncePrefix(local)}@${domain}`;
       record(foldOntoKnownRecipient(stripped, open.keys()), 'VERP bounce address');
@@ -488,7 +640,24 @@ function trackingFinding(headers) {
 
 // RFC 2919 puts the identifier in angle brackets, with an optional human
 // description in front of it: `Weekly deals <deals.list.example.com>`.
-const LIST_ID_RE = /^\s*(.*?)\s*<([^>]+)>\s*$/;
+/**
+ * Split a List-ID into its description and its identifier (RFC 2919).
+ *
+ * Index arithmetic rather than a regex. The obvious pattern for this —
+ * `^\s*(.*?)\s*<([^>]+)>\s*$` — pairs a lazy `.*?` with a trailing anchor,
+ * which makes the engine retry the whole tail at every position: a List-ID of
+ * `a` + 40 000 spaces + `a` cost 3.3 seconds on its own, and a browser runs
+ * this on the main thread. The same rule expressed by position is linear.
+ */
+function splitListId(raw) {
+  const value = String(raw ?? '').trim();
+  if (!value.endsWith('>')) return null;
+  const open = value.lastIndexOf('<');
+  if (open === -1) return null;
+  const identifier = value.slice(open + 1, -1);
+  if (!identifier) return null;
+  return { description: value.slice(0, open).trim(), identifier };
+}
 
 const LIST_CONTEXT = [
   ['list-owner', 'Run by', 'The address that answers for this list — usually a person rather than a no-reply.'],
@@ -512,9 +681,9 @@ function listFinding(headers) {
   const items = [];
 
   if (rawId) {
-    const match = rawId.match(LIST_ID_RE);
-    const identifier = match?.[2] ?? rawId;
-    const description = match?.[1]?.replace(/^"|"$/g, '').trim();
+    const parts = splitListId(rawId);
+    const identifier = parts?.identifier ?? rawId;
+    const description = parts?.description.replace(/^"|"$/g, '').trim();
 
     items.push({
       label: 'List identifier',
@@ -749,29 +918,62 @@ function authFinding(headers) {
   // Each verdict needs its own sentence. A single description per mechanism
   // reads as the pass case, which on a failing message states the opposite of
   // what happened — the one error this card must never make.
-  const explain = {
-    spf: {
+  //
+  // The result vocabularies are RFC 8601 §2.7, which takes SPF's from RFC 7208
+  // §2.6 and DKIM's from RFC 6376 §3.9. All of them are here, because the
+  // catch-all used to answer for the ones that were missing and it answered
+  // wrongly: `neutral` is not "no verdict could be reached", it is the domain
+  // owner declining to assert one, which is a decision they made on purpose.
+  //
+  // `table()` for the same reason it is used elsewhere — the verdict is `(\w+)`
+  // out of a header, so a plain object answers to `constructor` with a function
+  // and prints it as a finding.
+  const explain = table({
+    spf: table({
       pass: 'The sending server was authorised by the domain to send on its behalf.',
       fail: 'The sending server was not authorised by the domain it claims to send for.',
       softfail: 'The domain lists this server as probably not authorised, but stops short of saying so outright.',
+      neutral: 'The domain publishes an SPF record and it declines to say either way about this server. That is a deliberate position, not a missing answer.',
       none: 'The domain publishes no SPF record, so there was nothing to check against.',
-      other: 'No verdict could be reached — usually a lookup that failed rather than a judgement.',
-    },
-    dkim: {
+      temperror: 'The check could not be completed — a DNS lookup failed temporarily. It says nothing about the message; a retry might have passed.',
+      permerror: 'The domain\'s own SPF record could not be interpreted — it is malformed, or it exceeds the ten-lookup limit. The fault is in the published record, not in this message.',
+      other: 'This receiver used an SPF result word this tool does not know.',
+    }),
+    dkim: table({
       pass: 'The message carries an intact cryptographic signature from the domain.',
       fail: 'A signature was present but did not verify. The message was altered in transit, or it was never signed by the domain it names.',
       none: 'The message carries no signature at all, so nothing about it can be verified cryptographically.',
-      other: 'The signature could not be evaluated.',
-    },
-    dmarc: {
+      neutral: 'A signature was present but could not be judged either way — usually one that is malformed rather than wrong.',
+      policy: 'The signature verified, and the receiver declined to accept it anyway: it did not meet a local rule, such as a minimum key size or a required signing domain.',
+      temperror: 'The check could not be completed — retrieving the public key from DNS failed temporarily.',
+      permerror: 'The signature could not be checked at all: the header is malformed, or the key it names does not exist.',
+      other: 'This receiver used a DKIM result word this tool does not know.',
+    }),
+    dmarc: table({
       pass: 'The domain\'s published policy on failures was satisfied.',
       fail: 'The message failed the domain\'s own policy — the domain owner asks receivers not to trust mail like this.',
       none: 'The domain publishes no DMARC policy, so it has never said what should happen to forgeries.',
-      other: 'The policy could not be evaluated.',
-    },
-    arc: { other: 'Chain of custody across forwarding hops.' },
-    bimi: { other: 'Brand logo verification.' },
-  };
+      bestguesspass: 'The domain publishes no DMARC record, but the check would have passed if it did. Microsoft\'s wording, not a standard result — treat it as "no policy", because that is what it is.',
+      temperror: 'The check could not be completed — a DNS lookup failed temporarily.',
+      permerror: 'The domain\'s DMARC record could not be interpreted. The fault is in the published record.',
+      other: 'This receiver used a DMARC result word this tool does not know.',
+    }),
+    // ARC is not decisive, but it is not noise either — see the note below,
+    // which is replaced when ARC is the thing explaining a DMARC failure.
+    arc: table({
+      pass: 'A forwarder vouched for how this message looked when it arrived, and that chain of custody is intact.',
+      fail: 'A forwarder\'s seal did not verify, so nothing can be reconstructed about the message before it was forwarded.',
+      none: 'No forwarder sealed this message, which is the ordinary case for mail sent directly.',
+      other: 'Chain of custody across forwarding hops.',
+    }),
+    bimi: table({
+      pass: 'The sender is entitled to display a verified logo in mail clients that show one.',
+      fail: 'A logo was claimed and the claim did not check out.',
+      skipped: 'The receiver did not look, usually because the message did not qualify.',
+      none: 'No brand logo was claimed.',
+      other: 'Brand logo verification.',
+    }),
+  });
 
   // Only SPF, DKIM and DMARC carry weight. BIMI and ARC are absent or failing
   // on most legitimate mail, so colouring them red would cry wolf.

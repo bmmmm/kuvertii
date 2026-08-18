@@ -1,6 +1,8 @@
 // Findings → text for a terminal. The second renderer over the same analysis
 // the page uses; nothing here decides what is reported, only how it reads.
 
+import { neutralise } from './control.js';
+
 // ------------------------------------------------------------------ defanging
 
 // URLs in a header are hostile by assumption, and a terminal is a worse place
@@ -13,14 +15,31 @@
 // So every URL is defanged on the way out, the way threat reports have written
 // them for decades: the scheme is broken and the dots are bracketed, which
 // matches no terminal's URL pattern and survives being copied by accident.
+//
+// The repetition in the two host patterns is bounded, which it has to be.
+// `(?:label\.)+tld` looks harmless and is not: given a long run of `a.a.a.…`
+// with nothing that can serve as a TLD, the engine retries the whole run from
+// each position in turn — measured at 5.3 seconds for 32 KB of it, reachable
+// through a List-ID whose brackets were omitted. The bounds are the ones DNS
+// already imposes: 63 octets per label, and no real hostname carries twenty of
+// them. URL_RE's tail is left open because it has nothing to backtrack into —
+// a single negated class matches once and stops.
 const URL_RE = /\b(?:https?|ftps?):\/\/[^\s<>"'`]+/i;
-const EMAIL_RE = /\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b/i;
-const BARE_HOST_RE = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\b/gi;
+const EMAIL_RE = /(?<![a-z0-9._%+-])[a-z0-9._%+-]{1,64}@[a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){0,10}\.[a-z]{2,24}\b/i;
+const BARE_HOST_RE = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.){1,20}[a-z]{2,24}\b/gi;
 
 // One capturing split, so URLs and addresses land in segments of their own and
 // the hostname pass only ever sees the text between them.
 const SPLIT_RE = new RegExp(`(${URL_RE.source}|${EMAIL_RE.source})`, 'gi');
 const URL_START_RE = /^(?:https?|ftps?):\/\//i;
+
+// Separators that a browser treats as a dot but a regex does not. UTS-46 maps
+// each of these to `.` while resolving an internationalised name, so
+// `evil\u3002example` reaches the same host as `evil.example` — and reached the
+// screen unbracketed, because the hostname pattern only ever knew about the
+// ASCII one. Normalised before defanging rather than after: what gets bracketed
+// has to be the name that would actually resolve.
+const DOT_HOMOGLYPHS = /[\u3002\uFF0E\uFF61]/g;
 
 // The conventional spellings. Substituting letters generically would turn
 // `ftp` into `fxp` by accident rather than by decision.
@@ -34,7 +53,7 @@ function defangUrl(url) {
 }
 
 /**
- * Is the match at `offset` part of an encoded payload rather than a hostname?
+ * Is this whitespace-delimited token an encoded payload rather than a hostname?
  *
  * Tracking blobs are long unbroken runs of base64, and a stretch like
  * `u001.SdBcvi` inside one reads as label-dot-TLD without being a host.
@@ -42,11 +61,31 @@ function defangUrl(url) {
  * surrounding token decides: a genuine hostname sits in a short word, while a
  * payload is long and carries characters no hostname may contain.
  */
-function insidePayload(text, offset) {
-  const start = text.lastIndexOf(' ', offset) + 1;
-  const end = text.indexOf(' ', offset);
-  const token = text.slice(start, end === -1 ? text.length : end);
+function isPayloadToken(token) {
   return token.length > 40 && /[+/=]/.test(token);
+}
+
+/**
+ * Bracket every hostname in a string, skipping the ones inside payloads.
+ *
+ * The token each match sits in is found with a cursor that only ever moves
+ * forward, because `replace` hands matches over in increasing order of offset.
+ * Scanning back to the previous space on each match instead — which is what
+ * `lastIndexOf(' ', offset)` did — costs O(n) per match and O(n²) over a value
+ * dense in hostnames, which is exactly the shape of a long Received chain.
+ */
+function bracketHosts(part) {
+  let before = -1;
+  let after = part.indexOf(' ');
+
+  return part.replace(BARE_HOST_RE, (host, offset) => {
+    while (after !== -1 && after < offset) {
+      before = after;
+      after = part.indexOf(' ', after + 1);
+    }
+    const token = part.slice(before + 1, after === -1 ? part.length : after);
+    return isPayloadToken(token) ? host : host.replace(/\./g, '[.]');
+  });
 }
 
 /**
@@ -63,16 +102,14 @@ export function defang(text) {
   // hostname pass, because the local part looks like a hostname in its own
   // right: `maja.beispiel` matches label-dot-label as readily as any domain,
   // and inspecting only what follows the @ leaves it mangled.
-  const parts = String(text ?? '').split(SPLIT_RE);
+  const parts = String(text ?? '').replace(DOT_HOMOGLYPHS, '.').split(SPLIT_RE);
 
   return parts
     .map((part) => {
       if (!part) return part;
       if (URL_START_RE.test(part)) return defangUrl(part);
       if (EMAIL_RE.test(part)) return part;
-      return part.replace(BARE_HOST_RE, (host, offset) => (
-        insidePayload(part, offset) ? host : host.replace(/\./g, '[.]')
-      ));
+      return bracketHosts(part);
     })
     .join('');
 }
@@ -104,10 +141,28 @@ const LEVEL_COLOUR = { bad: ANSI.red, good: ANSI.green, caution: ANSI.yellow, ab
 const LEVEL_MARK = { bad: '✗', good: '✓', caution: '!', absent: '○' };
 
 /**
+ * Everything a header can reach, on its way to the screen.
+ *
+ * The order is not arbitrary. `neutralise` runs first because `defang` is a
+ * text-pattern filter: it rewrites what *looks* like a URL, which is a question
+ * that only means anything once the string is known to be text. An OSC 8
+ * hyperlink whose target uses a scheme `defang` does not recognise would
+ * otherwise pass through whole and stay clickable — the exact outcome defanging
+ * exists to prevent.
+ *
+ * Applied to labels and titles as well as values: a blocklist verdict puts the
+ * offending host in the label, and the analysis has no way to promise that a
+ * given field will still be prose next year.
+ */
+const safe = (text) => defang(neutralise(text));
+
+/**
  * Build a renderer.
  *
  * Colour is opt-out through NO_COLOR and off by default when stdout is not a
- * terminal, so piping into a file or a pager yields plain text.
+ * terminal, so piping into a file or a pager yields plain text. Neither switch
+ * reaches `safe`: with colour off, the attacker's escapes would be the only
+ * ones left in the output, which is the case that most needs them gone.
  */
 export function createRenderer({ colour = true, width = 80 } = {}) {
   const paint = (code, text) => (colour ? `${code}${text}${ANSI.reset}` : text);
@@ -148,11 +203,11 @@ export function createRenderer({ colour = true, width = 80 } = {}) {
     // puts the offending hostname in the label — `evil.example is on a phishing
     // blocklist` — so leaving labels alone published a live link for precisely
     // the domain the reader has just been warned about.
-    out.push(`  ${paint(colourFor || ANSI.bold, `${marker} ${defang(item.label)}`)}`);
+    out.push(`  ${paint(colourFor || ANSI.bold, `${marker} ${safe(item.label)}`)}`);
 
     // Mono values are structural — an id, a route, a decoded payload — and are
     // printed verbatim rather than wrapped, since folding them invents breaks.
-    const value = defang(item.value);
+    const value = safe(item.value);
     if (item.mono) {
       for (const line of String(value).split('\n')) out.push(`    ${paint(ANSI.dim, line)}`);
     } else {
@@ -162,13 +217,13 @@ export function createRenderer({ colour = true, width = 80 } = {}) {
     if (item.chips?.length) {
       // Chips wrap as a group. A row can carry four of them naming a header
       // and a decode method each, which is well past any terminal width.
-      const rendered = item.chips.map((chip) => `[${defang(chip)}]`).join(' ');
+      const rendered = item.chips.map((chip) => `[${safe(chip)}]`).join(' ');
       out.push(...wrapPainted(rendered, ANSI.dim, 4));
     }
 
     if (item.note && !seenNotes.has(item.note)) {
       seenNotes.add(item.note);
-      out.push(...wrapPainted(defang(item.note), ANSI.dim, 4));
+      out.push(...wrapPainted(safe(item.note), ANSI.dim, 4));
     }
     return out;
   };
@@ -179,8 +234,8 @@ export function createRenderer({ colour = true, width = 80 } = {}) {
     // places a hostname could reach the screen unbroken. Defanged too, so the
     // guarantee holds for the whole card rather than for the fields that
     // happened to carry data when this was written.
-    out.push(paint(TONE_COLOUR[finding.tone] ?? '', paint(ANSI.bold, defang(finding.title))));
-    if (finding.lede) out.push(...wrapPainted(defang(finding.lede), ANSI.dim));
+    out.push(paint(TONE_COLOUR[finding.tone] ?? '', paint(ANSI.bold, safe(finding.title))));
+    if (finding.lede) out.push(...wrapPainted(safe(finding.lede), ANSI.dim));
     out.push('');
 
     const seenNotes = new Set();

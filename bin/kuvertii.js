@@ -15,7 +15,7 @@ import { has, normaliseHost } from '../js/bloom.js';
 import { clearClipboard, readClipboard } from '../js/clipboard.js';
 import { analyse } from '../js/findings.js';
 import { createRenderer } from '../js/terminal.js';
-import { parseHeaders } from '../js/unfold.js';
+import { MAX_HEADER_BYTES, parseHeaders } from '../js/unfold.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DATA = join(HERE, '..', 'data');
@@ -108,7 +108,11 @@ function blocklistItems(results) {
  */
 function headerBlock(text) {
   const end = text.search(/\r?\n\r?\n/);
-  return end === -1 ? text : text.slice(0, end);
+  const block = end === -1 ? text : text.slice(0, end);
+  // Same ceiling the page applies, for the same reason: a header this long is
+  // not one a mail server produced. Clipped rather than refused — the fields
+  // worth reading sit at the top.
+  return block.length > MAX_HEADER_BYTES ? block.slice(0, MAX_HEADER_BYTES) : block;
 }
 
 // --------------------------------------------------------------------- report

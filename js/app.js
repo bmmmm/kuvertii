@@ -2,8 +2,9 @@
 // storage, no history entry, no form restoration.
 
 import { checkHost } from './blocklist.js';
+import { neutralise } from './control.js';
 import { analyse } from './findings.js';
-import { parseHeaders } from './unfold.js';
+import { MAX_HEADER_BYTES, parseHeaders } from './unfold.js';
 
 const input = document.querySelector('#header-input');
 const results = document.querySelector('#results');
@@ -19,11 +20,18 @@ const status = document.querySelector('#status');
  * URL out of a header is displayed as inert text and must never become
  * clickable, because the click is the thing the sender is waiting for. The
  * only links on this page are the hand-written ones in the footer.
+ *
+ * `textContent` settles what the browser will *parse*, and `neutralise` settles
+ * what it will *display*. The two are not the same question: U+202E is not
+ * markup and survives textContent intact, but it reverses the characters after
+ * it, so a hostname whose bytes read `evil` can be shown to the reader as
+ * `account.apple.com`. On a page whose entire purpose is to say where a link
+ * really goes, that is the whole game — hence the same pass the terminal uses.
  */
 function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
-  if (text !== undefined && text !== null) node.textContent = String(text);
+  if (text !== undefined && text !== null) node.textContent = neutralise(text);
   return node;
 }
 
@@ -70,7 +78,7 @@ function renderFinding(finding) {
  * this snapshot" and never as "safe" — the snapshot is days old and phishing
  * domains rarely live that long.
  */
-async function appendBlocklistVerdict(list, hosts, meta) {
+async function appendBlocklistVerdict(list, hosts) {
   for (const host of hosts) {
     const result = await checkHost(host);
 
@@ -101,11 +109,19 @@ async function appendBlocklistVerdict(list, hosts, meta) {
       }));
     }
   }
-  if (meta) status.textContent = '';
 }
 
 function run() {
-  const text = input.value;
+  const pasted = input.value;
+  // A ceiling on how long this tab can stop responding: analyse() is synchronous
+  // and there is no worker behind it. Clipped rather than refused, because the
+  // fields worth reading are at the top of a header and a reader who pasted a
+  // whole mailbox is better served by an answer than by a complaint.
+  const overLength = pasted.length > MAX_HEADER_BYTES;
+  const text = overLength ? pasted.slice(0, MAX_HEADER_BYTES) : pasted;
+  const clipped = overLength
+    ? ` Only the first ${Math.round(MAX_HEADER_BYTES / 1024)} KB of what you pasted was read.`
+    : '';
   results.replaceChildren();
 
   if (!text.trim()) {
@@ -117,7 +133,7 @@ function run() {
   const headers = parseHeaders(text);
   if (!headers.length) {
     emptyState.hidden = false;
-    status.textContent = 'Nothing here parsed as a header block.';
+    status.textContent = `Nothing here parsed as a header block.${clipped}`;
     return;
   }
 
@@ -125,17 +141,17 @@ function run() {
   emptyState.hidden = true;
 
   if (!findings.length) {
-    status.textContent = `Parsed ${headers.length} header fields, but found nothing noteworthy in them.`;
+    status.textContent = `Parsed ${headers.length} header fields, but found nothing noteworthy in them.${clipped}`;
     return;
   }
 
-  status.textContent = `${headers.length} header fields read. Nothing left this page.`;
+  status.textContent = `${headers.length} header fields read. Nothing left this page.${clipped}`;
 
   for (const finding of findings) {
     const { card, list } = renderFinding(finding);
     results.append(card);
     if (finding.hostsToCheck?.length) {
-      appendBlocklistVerdict(list, finding.hostsToCheck, true).catch(() => {
+      appendBlocklistVerdict(list, finding.hostsToCheck).catch(() => {
         /* rendered inline as unavailable */
       });
     }

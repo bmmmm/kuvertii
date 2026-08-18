@@ -4,7 +4,14 @@
 // of this module is to look: try a handful of cheap transforms and keep only
 // the results that turn into something a human can read.
 
-const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+// Every quantifier here is bounded, and the leading lookbehind is what makes
+// the bounds hold. Without it the engine retries the local part at every one of
+// its own characters, so a single long run of `[A-Za-z0-9._%+-]` costs O(n²) —
+// and a header field is allowed to be 100 KB long, which a sender does not need
+// anyone's cooperation to exploit. The limits are RFC 5321 §4.5.3.1: 64 octets
+// of local part, 63 per label. Ten labels and a 24-character TLD are past
+// anything that resolves.
+const EMAIL_RE = /(?<![A-Z0-9._%+-])[A-Z0-9._%+-]{1,64}@[A-Z0-9-]{1,63}(?:\.[A-Z0-9-]{1,63}){0,10}\.[A-Z]{2,24}/i;
 const DOMAIN_RE = /\b[A-Z0-9-]+\.(?:[A-Z]{2,}\.)?[A-Z]{2,}\b/i;
 const WORD_RE = /[A-Za-z]{4,}/;
 

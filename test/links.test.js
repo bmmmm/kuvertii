@@ -89,3 +89,63 @@ test('a malformed url does not throw', () => {
   const report = inspectUnsubscribeLink('not a url at all', {});
   assert.equal(report.verdict, 'suspicious');
 });
+
+// Domain boundaries come from the real Public Suffix List, baked in by
+// tools/build-psl.mjs. What follows is the case that made it necessary: the
+// hand-written approximation it replaced merged any two names sharing a
+// multi-label suffix it had never heard of, and there were 5,487 of those.
+
+test('a multi-label suffix is not itself a registrable domain', () => {
+  assert.equal(registrableDomain('evil.com.sg'), 'evil.com.sg');
+  assert.equal(registrableDomain('bank.com.sg'), 'bank.com.sg');
+  assert.equal(registrableDomain('foo.bar.co.il'), 'bar.co.il');
+  assert.equal(registrableDomain('a.b.c.pvt.k12.ma.us'), 'c.pvt.k12.ma.us');
+});
+
+test('the ordinary cases are unchanged', () => {
+  assert.equal(registrableDomain('a.b.example.com'), 'example.com');
+  assert.equal(registrableDomain('bbc.co.uk'), 'bbc.co.uk');
+  assert.equal(registrableDomain('news.example.org'), 'example.org');
+  // A TLD this list has never seen falls to the default rule, `*`.
+  assert.equal(registrableDomain('host.invalidtld'), 'host.invalidtld');
+});
+
+test('a wildcard rule and its exception both apply', () => {
+  // `*.ck` makes every `X.ck` a public suffix; `!www.ck` takes one back.
+  assert.equal(registrableDomain('foo.bar.ck'), 'foo.bar.ck');
+  assert.equal(registrableDomain('www.ck'), 'www.ck');
+});
+
+test('a hosting platform separates its tenants', () => {
+  // The PRIVATE section. Without it these collapse to one domain, which is the
+  // multi-label-suffix bug again on a suffix the registry did not sell.
+  assert.equal(registrableDomain('alice.github.io'), 'alice.github.io');
+  assert.equal(registrableDomain('evil.github.io'), 'evil.github.io');
+  assert.equal(registrableDomain('a.blogspot.com'), 'a.blogspot.com');
+});
+
+test('a known bulk-mail platform still reduces to itself', () => {
+  // js/senders.js is keyed by registrable domain, so widening the suffix list
+  // must not split an ESP into per-customer domains it no longer recognises.
+  for (const domain of ['sendgrid.net', 'list-manage.com', 'mailchimp.com', 't.co']) {
+    assert.equal(registrableDomain(domain), domain);
+  }
+  assert.equal(registrableDomain('em1234.sendgrid.net'), 'sendgrid.net');
+});
+
+test('a name that is only a public suffix names no registrant', () => {
+  assert.equal(registrableDomain('co.uk'), 'co.uk');
+  assert.equal(registrableDomain('com.sg'), 'com.sg');
+});
+
+test('an unsubscribe on a different com.sg registrant is not "the sender domain"', () => {
+  // End to end, because the reduction is what the verdict is built on: this
+  // rendered as `✓ Unsubscribe stays on the sender domain — Both are com.sg`.
+  const result = inspectUnsubscribeLink('https://evil.com.sg/unsubscribe?id=abc', {
+    fromDomain: 'bank.com.sg',
+  });
+  const titles = result.signals.map((s) => s.title).join(' | ');
+  assert.doesNotMatch(titles, /stays on the sender domain/);
+  assert.match(titles, /unrelated domain/);
+  assert.ok(!result.signals.some((s) => s.level === 'good' && /sender domain/.test(s.title)));
+});

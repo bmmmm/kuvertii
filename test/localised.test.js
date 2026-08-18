@@ -101,3 +101,72 @@ test('BIMI and ARC results are reported without being marked as failures', () =>
   assert.equal(bimi.level, null, 'a missing brand logo is not a red flag');
   assert.equal(items.find((i) => i.label.startsWith('SPF')).level, 'good');
 });
+
+// A localised label is a translation of a field, not a competitor to it. The
+// alias table exists so that a paste which lost its English labels still
+// analyses; it was never meant to arbitrate when both are present, and left to
+// do so it preferred whichever came first — which the sender chooses.
+
+test('an aliased label never overrides the real field', () => {
+  // `De:` is a syntactically valid optional header. No relay strips it and no
+  // client displays it, so the reader sees only its effect.
+  const headers = parseHeaders([
+    'De: refund-desk@attacker-mail.example',
+    'From: PayPal Support <support@paypal.com>',
+    'To: you@example.org',
+  ].join('\n'));
+
+  assert.equal(get(headers, 'from'), 'PayPal Support <support@paypal.com>');
+  assert.ok(headers.some((h) => h.name === 'De'), 'the line is kept, under the name it was written with');
+});
+
+test('the reply-to warning survives a smuggled alias', () => {
+  // Suppressing this card is what the smuggle buys: with `De:` winning `From`,
+  // the sender and the reply address agree and nothing is reported.
+  const headers = parseHeaders([
+    'De: refund-desk@attacker-mail.example',
+    'From: PayPal Support <support@paypal.com>',
+    'Reply-To: refund-desk@attacker-mail.example',
+    'To: you@example.org',
+  ].join('\n'));
+
+  const text = JSON.stringify(analyse(headers));
+  assert.match(text, /attacker-mail\.example/);
+  assert.match(text, /repl(y|ies)/i);
+});
+
+test('a genuine localised paste still resolves every field', () => {
+  // The case the alias table exists for: no English label anywhere.
+  const headers = parseHeaders([
+    'Von: Echte Firma <info@firma.example>',
+    'An: du@example.org',
+    'Antwort an: service@firma.example',
+    'Betreff: Rechnung',
+  ].join('\n'));
+
+  assert.equal(get(headers, 'from'), 'Echte Firma <info@firma.example>');
+  assert.equal(get(headers, 'to'), 'du@example.org');
+  assert.equal(get(headers, 'reply-to'), 'service@firma.example');
+});
+
+test('a smuggled alias is reported rather than quietly dropped', () => {
+  const findings = analyse(parseHeaders([
+    'De: refund-desk@attacker-mail.example',
+    'From: PayPal Support <support@paypal.com>',
+    'To: you@example.org',
+  ].join('\n')));
+
+  const text = JSON.stringify(findings[0]);
+  assert.match(text, /written as if it were From/);
+});
+
+test('a field that may appear once is reported when it appears twice', () => {
+  const findings = analyse(parseHeaders([
+    'From: PayPal Support <support@paypal.com>',
+    'From: refund-desk@attacker-mail.example',
+    'To: you@example.org',
+  ].join('\n')));
+
+  assert.match(findings[0].title, /twice/i);
+  assert.match(JSON.stringify(findings[0]), /from appears 2 times/);
+});

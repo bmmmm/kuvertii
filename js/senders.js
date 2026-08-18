@@ -5,12 +5,14 @@
 // stops an honest newsletter from looking like an attack, and stops a
 // tracking hop from looking like a hack.
 
+import { table } from './lookup.js';
+
 export const KIND_LABELS = {
   esp: 'bulk mail platform',
   shortener: 'link shortener',
 };
 
-const ESP = {
+const ESP = table({
   // Infrastructure / delivery
   'greenarrowmail.com': 'GreenArrow',
   'sendgrid.net': 'Twilio SendGrid',
@@ -80,9 +82,9 @@ const ESP = {
   'intercom-mail.com': 'Intercom',
   'intercom.io': 'Intercom',
   'zendesk.com': 'Zendesk',
-};
+});
 
-const SHORTENERS = {
+const SHORTENERS = table({
   'bit.ly': 'Bitly',
   'tinyurl.com': 'TinyURL',
   't.co': 'X / Twitter',
@@ -93,7 +95,7 @@ const SHORTENERS = {
   'cutt.ly': 'Cutt.ly',
   'shorturl.at': 'ShortURL',
   'lnkd.in': 'LinkedIn',
-};
+});
 
 /** Identify a registrable domain, or null when it is not a known platform. */
 export function identifySender(registrableDomain) {

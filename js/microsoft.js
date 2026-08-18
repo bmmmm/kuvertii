@@ -15,7 +15,9 @@ import { get } from './unfold.js';
 // also "filtering was skipped", which is what a mail flow rule looks like from
 // the inside — and which is how a hostile message gets waved through.
 
-const SPAM_VERDICTS = {
+import { emptyTable, table } from './lookup.js';
+
+const SPAM_VERDICTS = table({
   SPM: ['The filter classified this message as spam.', 'bad'],
   HSPM: ['The filter classified this message as spam, with high confidence.', 'bad'],
   BLK: ['The sender was on a block list.', 'bad'],
@@ -35,19 +37,19 @@ const SPAM_VERDICTS = {
   SKB: ['A block list matched.', 'bad'],
   SKQ: ['Someone released this message from quarantine.', 'caution'],
   SKI: ['Filtering was skipped.', 'caution'],
-};
+});
 
-const IMPERSONATION_SAFETY = {
+const IMPERSONATION_SAFETY = table({
   '9.19': 'domain impersonation — the sending domain resembles one the organisation deals with',
   '9.20': 'user impersonation — the display name resembles someone the recipient knows',
   '9.11': 'bulk mail',
   '9.21': 'the message claimed to come from inside the organisation',
   '9.22': 'the message claimed to come from a domain that did not authorise it',
-};
+});
 
 /** Split `KEY:VALUE;KEY:VALUE;` into a lookup, uppercasing the keys. */
 function parseReport(value) {
-  const fields = {};
+  const fields = emptyTable();
   for (const pair of String(value ?? '').split(';')) {
     const [key, ...rest] = pair.split(':');
     if (!key?.trim()) continue;

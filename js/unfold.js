@@ -36,6 +36,21 @@ const FIELD_ALIASES = new Map(Object.entries({
   'aan': 'To', 'onderwerp': 'Subject', 'antwoorden aan': 'Reply-To',
 }));
 
+/**
+ * How much pasted text is read before the rest is ignored.
+ *
+ * Not a defence against slow input — the patterns this analysis runs are all
+ * linear now, and 1 MB of hostile header measures 426 ms end to end. It is a
+ * bound on how long the page can stop responding, since `analyse` runs on the
+ * browser's main thread with no worker behind it.
+ *
+ * Set where a real header cannot reach it. Postfix caps a single logical header
+ * at 102400 octets and does not cap how many there are, so a delivered message
+ * can legitimately run to a few hundred kilobytes; a megabyte is ten times the
+ * largest header worth reading and still returns inside half a second.
+ */
+export const MAX_HEADER_BYTES = 1024 * 1024;
+
 /** Canonical field name for a label, or null when it is not a known field. */
 function canonicalise(name) {
   return FIELD_ALIASES.get(name.trim().toLowerCase()) ?? null;
@@ -148,7 +163,38 @@ export function parseHeaders(text) {
   });
 
   flush();
-  return promoteLeadingSender(headers);
+  return promoteLeadingSender(resolveAliasConflicts(headers));
+}
+
+/**
+ * Stop a localised label from outranking the field it is a translation of.
+ *
+ * The alias table exists for a paste that lost its English labels — an Apple
+ * Mail window that renders `Von:` and never shows `From:`. It was never meant
+ * to arbitrate between the two, and left to do so it arbitrates badly: `get()`
+ * returns the first match, so a line the sender invented wins over the field
+ * the mail actually carries.
+ *
+ * That is reachable. `De:` is a syntactically valid optional header, so it
+ * survives every relay untouched and no client displays it; placed above the
+ * real `From:`, it silently removes the finding that says a reply would go
+ * somewhere unexpected — which is the single most useful thing this tool says.
+ *
+ * So an alias yields whenever the real field is present, and keeps the name the
+ * sender actually wrote. The value is not discarded: an unexplained `De:` in a
+ * header is worth seeing, it is just not a From.
+ */
+function resolveAliasConflicts(headers) {
+  const stated = new Set(
+    headers.filter((h) => !h.displayedAs).map((h) => h.name.toLowerCase()),
+  );
+  if (!stated.size) return headers;
+
+  return headers.map((header) => {
+    if (!header.displayedAs || !stated.has(header.name.toLowerCase())) return header;
+    const { displayedAs, ...rest } = header;
+    return { ...rest, name: displayedAs, aliasOverruled: header.name };
+  });
 }
 
 /**
