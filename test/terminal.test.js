@@ -133,6 +133,7 @@ test('the marks the page uses match the ones the terminal prints', async () => {
   assert.match(css, /\.item--good \.item__label::before \{ content: "✓"/);
   assert.match(css, /\.item--bad \.item__label::before \{ content: "✗"/);
   assert.match(css, /\.item--caution \.item__label::before \{ content: "!"/);
+  assert.match(css, /\.item--fault \.item__label::before \{ content: "‡"/);
   assert.match(css, /\.item--absent \.item__label::before \{ content: "○"/);
 });
 

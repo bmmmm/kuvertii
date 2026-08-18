@@ -127,18 +127,26 @@ const ANSI = {
 };
 
 const TONE_COLOUR = { alert: ANSI.red, info: ANSI.blue, neutral: ANSI.dim };
-const LEVEL_COLOUR = { bad: ANSI.red, good: ANSI.green, caution: ANSI.yellow, absent: ANSI.dim };
+const LEVEL_COLOUR = {
+  bad: ANSI.red, good: ANSI.green, caution: ANSI.yellow, absent: ANSI.dim, fault: ANSI.red,
+};
 
 // A verdict carries a mark as well as a colour, so that it survives everything
 // that loses colour: a pipe, --no-colour, NO_COLOR, a monochrome terminal, or
-// a reader who cannot distinguish red from green. All four are single-width,
+// a reader who cannot distinguish red from green. All five are single-width,
 // which keeps the labels aligned.
 //
 // `absent` is deliberately its own category rather than a failure. A missing
 // field or an unsigned message is not a fault in the mail — it is something
 // the analysis could not do, and marking it red would put it on a level with a
 // forged sender.
-const LEVEL_MARK = { bad: '✗', good: '✓', caution: '!', absent: '○' };
+//
+// `fault` is the one level that is not about the message at all: a section of
+// this tool threw while it ran. It gets a mark of its own rather than borrowing
+// `absent`, because the reader is owed the difference between "this message
+// carries no signature" and "we failed to look". The double dagger is the
+// typographer's mark for a defect in the record itself.
+const LEVEL_MARK = { bad: '✗', good: '✓', caution: '!', absent: '○', fault: '‡' };
 
 /**
  * Everything a header can reach, on its way to the screen.

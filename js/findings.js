@@ -34,32 +34,72 @@ const SENDER_FIELDS = [
   'x-complaints-to', 'abuse-reports-to',
 ];
 
+/**
+ * One section's worth of analysis, with its failure kept inside it.
+ *
+ * Thirteen producers share one array and, until this existed, one fate: a throw
+ * anywhere took the whole report down and left the reader with a stack trace
+ * instead of the twelve sections that had nothing wrong with them. That is
+ * reachable from the header — `DKIM-Signature: t=99999999999999` is one field a
+ * sender writes and controls, and it was enough.
+ *
+ * A caught throw is reported rather than swallowed, and reported as what it is:
+ * not a fact about the message, but a fault in this tool. `absent` would be the
+ * wrong level for it — that one means "the analysis could not do this", which
+ * is a statement about the mail. This is a statement about us.
+ *
+ * Exported because a boundary nothing can test is a boundary nothing keeps:
+ * test/findings.test.js drives it with a producer that throws on purpose, which
+ * is the only way this path is reachable once the bugs behind it are fixed.
+ */
+export function guardSection(section, produce) {
+  try {
+    return produce();
+  } catch (error) {
+    return {
+      id: `fault:${section}`,
+      title: 'Part of this report could not be produced',
+      tone: 'alert',
+      lede: 'A section of this analysis failed while it ran. Everything else below was produced normally — but this report is now narrower than it looks, and the gap is ours rather than the message\'s.',
+      items: [{
+        label: `The ${section} section failed`,
+        value: `${error?.name ?? 'Error'}: ${error?.message ?? String(error)}`,
+        level: 'fault',
+        note: 'This is a bug in kuvertii, not a finding about the message. Whatever that section would have told you about this header, it did not.',
+      }],
+    };
+  }
+}
+
 export function analyse(headers) {
   const findings = [];
-  const push = (f) => { if (f) findings.push(f); };
+  const push = (section, produce) => {
+    const finding = guardSection(section, produce);
+    if (finding) findings.push(finding);
+  };
 
-  push(completenessFinding(headers));
-  push(recipientFinding(headers));
-  push(disclosureFinding(headers));
-  push(trackingFinding(headers));
-  push(listFinding(headers));
-  push(unsubscribeFinding(headers));
-  push(replyToFinding(headers));
-  push(originFinding(headers));
-  push(authFinding(headers));
-  push(routeFinding(headers));
-  push(judgementFinding(headers));
+  push('completeness', () => completenessFinding(headers));
+  push('recipient', () => recipientFinding(headers));
+  push('disclosure', () => disclosureFinding(headers));
+  push('tracking', () => trackingFinding(headers));
+  push('list', () => listFinding(headers));
+  push('unsubscribe', () => unsubscribeFinding(headers));
+  push('reply-to', () => replyToFinding(headers));
+  push('origin', () => originFinding(headers));
+  push('authentication', () => authFinding(headers));
+  push('route', () => routeFinding(headers));
+  push('judgement', () => judgementFinding(headers));
 
   // Both are computed last and read first. They qualify every finding above
   // them — if part of this report was written by the sender rather than derived
   // from the message, that has to be said before the rest of it is believed.
-  const contradictions = contradictionFinding(headers);
+  const contradictions = guardSection('contradictions', () => contradictionFinding(headers));
   if (contradictions) findings.unshift(contradictions);
 
   // Necessarily after the others exist: the decoders turn values that were
   // ordinary base64 in the raw header into escape sequences, and those only
   // become visible once a finding has been built out of them.
-  const controls = controlCharacterFinding(headers, findings);
+  const controls = guardSection('control characters', () => controlCharacterFinding(headers, findings));
   if (controls) findings.unshift(controls);
 
   return findings;
@@ -938,6 +978,31 @@ function originFinding(headers) {
 // -------------------------------------------------------------------- auth
 
 /**
+ * A DKIM `t=`/`x=` value as a Date, or null when it is not a time at all.
+ *
+ * Both tags are decimal seconds and the sender writes them. The pattern that
+ * reads them, `\d{9,}`, has no upper bound; `Date` does, at ±8.64e15
+ * milliseconds. A value one digit too long therefore reached `toISOString()`,
+ * which throws `RangeError: Invalid time value` — and that throw travelled out
+ * of `analyse`, out of `report`, and out of the process, so a single field a
+ * spammer controls completely suppressed the entire report.
+ *
+ * Returning null instead of throwing lets the caller say what is true — that
+ * the field is not a time — rather than either crashing or, worse, quietly
+ * comparing against an invalid Date, where every `<` and `>` answers false and
+ * "has it expired" gets the same reassuring answer whichever way it is asked.
+ */
+function signatureTime(seconds) {
+  const at = new Date(Number(seconds) * 1000);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
+/** A Date as the `YYYY-MM-DD HH:MM:SS UTC` this report prints everywhere. */
+function formatUtc(at) {
+  return at.toISOString().replace('T', ' ').replace(/\..+/, ' UTC');
+}
+
+/**
  * The `dmarc=…` portion of an Authentication-Results string.
  *
  * Runs to the next unparenthesised semicolon, because every receiver worth
@@ -1226,10 +1291,15 @@ function authFinding(headers) {
 
   const timestamp = dkimSignature.match(/\bt=(\d{9,})/)?.[1];
   if (timestamp) {
-    items.push({
-      label: 'Signed at',
-      value: new Date(Number(timestamp) * 1000).toISOString().replace('T', ' ').replace(/\..+/, ' UTC'),
-    });
+    const signedAt = signatureTime(timestamp);
+    items.push(signedAt
+      ? { label: 'Signed at', value: formatUtc(signedAt) }
+      : {
+        label: 'The signature claims a time that is not a time',
+        value: `t=${timestamp}`,
+        level: 'caution',
+        note: 'Seconds since 1970, and this many of them lands outside any date that can be expressed. A verifier reading it has nothing to compare against, so whatever the signature was meant to bound, it does not.',
+      });
   }
 
   // A length tag signs only the first l= bytes of the body. Everything after
@@ -1253,17 +1323,24 @@ function authFinding(headers) {
   // about who it was sent to.
   const expiry = dkimSignature.match(/\bx=(\d{9,})/)?.[1];
   if (expiry) {
-    const expiresAt = new Date(Number(expiry) * 1000);
+    const expiresAt = signatureTime(expiry);
     const newestHop = receivedDates(headers)[0];
-    const stale = newestHop && expiresAt < newestHop;
-    items.push({
-      label: stale ? 'The signature had expired before this message arrived' : 'The signature carries an expiry',
-      value: `Valid until ${expiresAt.toISOString().replace('T', ' ').replace(/\..+/, ' UTC')}.`,
-      note: stale
-        ? 'An expired signature verifies as no signature at all, so whatever DKIM appeared to vouch for here, it no longer does.'
-        : 'A short window limits how long a correctly signed copy can be replayed to other recipients.',
-      level: stale ? 'caution' : null,
-    });
+    const stale = expiresAt && newestHop && expiresAt < newestHop;
+    items.push(expiresAt
+      ? {
+        label: stale ? 'The signature had expired before this message arrived' : 'The signature carries an expiry',
+        value: `Valid until ${formatUtc(expiresAt)}.`,
+        note: stale
+          ? 'An expired signature verifies as no signature at all, so whatever DKIM appeared to vouch for here, it no longer does.'
+          : 'A short window limits how long a correctly signed copy can be replayed to other recipients.',
+        level: stale ? 'caution' : null,
+      }
+      : {
+        label: 'The expiry is not a time',
+        value: `x=${expiry}`,
+        level: 'caution',
+        note: 'An expiry outside any expressible date bounds nothing. Read it as a signature without an expiry, not as one with a distant deadline — and note that a comparison against it silently answers "not yet expired" whichever way it is asked.',
+      });
   }
 
   if (dkim2) {

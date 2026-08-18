@@ -202,6 +202,7 @@ button.primary {
 .item--good .item__label::before,
 .item--bad .item__label::before,
 .item--caution .item__label::before,
+.item--fault .item__label::before,
 .item--absent .item__label::before {
   display: inline-block;
   width: 1.1em;
@@ -211,6 +212,9 @@ button.primary {
 .item--good .item__label::before { content: "✓"; color: var(--good); }
 .item--bad .item__label::before { content: "✗"; color: var(--bad); }
 .item--caution .item__label::before { content: "!"; color: var(--caution); }
+/* Fault is the one mark that is not about the message: a section of this tool
+   threw while it ran. Coloured like a failure because it is one — ours. */
+.item--fault .item__label::before { content: "‡"; color: var(--bad); }
 /* Absent is not a failure: a missing field is something the analysis could not
    do, not a fault in the message. Marked, but never coloured like a forgery. */
 .item--absent .item__label::before { content: "○"; color: var(--ink-faint); }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { analyse } from '../js/findings.js';
+import { analyse, guardSection } from '../js/findings.js';
 import { parseHeaders } from '../js/unfold.js';
 import { BULK_HEADER, MICROSOFT_HEADER, RECIPIENT } from './fixtures.js';
 
@@ -716,4 +716,74 @@ test('a message signed only under the DKIM2 draft is not met with silence', () =
   const row = finding.items.find((i) => /DKIM2/.test(i.label));
   assert.equal(row.level, undefined, 'a draft is not a verdict');
   assert.match(row.note, /no published RFC/);
+});
+
+// ------------------------------------------------------- faults are findings
+
+test('a timestamp too large to be a time is named, not thrown on', () => {
+  // `t=` is decimal seconds and the sender writes it. The pattern reading it
+  // has no upper bound and Date does, so this reached toISOString() and threw
+  // a RangeError out of analyse, out of report, and out of the process — one
+  // field a spammer controls, and the whole report was suppressed.
+  const findings = analyse(parseHeaders([
+    'From: a@b.example',
+    'DKIM-Signature: v=1; a=rsa-sha256; d=b.example; s=s1; t=99999999999999; bh=abc; b=def',
+  ].join('\n')));
+
+  const auth = findings.find((f) => f.id === 'auth');
+  assert.ok(auth, 'the section still exists');
+  assert.ok(!findings.some((f) => String(f.id).startsWith('fault:')), 'and did not merely fail politely');
+
+  const row = auth.items.find((i) => /not a time/.test(i.label));
+  assert.ok(row, 'the impossible timestamp is reported');
+  assert.equal(row.value, 't=99999999999999');
+});
+
+test('an expiry too large to be a time does not silently answer "not expired"', () => {
+  // The comparison against an invalid Date returns false whichever way it is
+  // asked, so the dangerous reading — "this signature is still valid" — is the
+  // one that would have been printed.
+  const findings = analyse(parseHeaders([
+    'From: a@b.example',
+    'Received: from x by y; Mon, 17 Aug 2026 09:14:02 -0700',
+    'DKIM-Signature: v=1; a=rsa-sha256; d=b.example; s=s1; x=99999999999999; bh=abc; b=def',
+  ].join('\n')));
+
+  const auth = findings.find((f) => f.id === 'auth');
+  const row = auth.items.find((i) => /expiry is not a time/.test(i.label));
+  assert.ok(row, 'the impossible expiry is reported');
+  assert.equal(row.level, 'caution');
+  assert.ok(
+    !auth.items.some((i) => /carries an expiry|had expired/.test(i.label)),
+    'and no verdict about expiry is stated alongside it',
+  );
+});
+
+test('a section that throws costs that section and nothing else', () => {
+  // The boundary is only reachable through a producer that throws, and the
+  // bugs that used to provide one are fixed. Driving it directly is what keeps
+  // it from rotting: delete the try/catch and this test is what goes red.
+  const finding = guardSection('demonstration', () => {
+    throw new RangeError('Invalid time value');
+  });
+
+  assert.equal(finding.tone, 'alert');
+  assert.equal(finding.items[0].level, 'fault', 'not absent — absent is about the mail, this is about us');
+  assert.match(finding.items[0].label, /demonstration/);
+  assert.match(finding.items[0].value, /RangeError: Invalid time value/);
+  assert.match(finding.items[0].note, /bug in kuvertii/);
+});
+
+test('a section that returns nothing is still nothing', () => {
+  assert.equal(guardSection('quiet', () => null), null);
+});
+
+test('no fixture makes the analysis fault', () => {
+  // The boundary must never be load-bearing for input we already understand.
+  // If this goes red, a producer started throwing on ordinary mail and the
+  // report has been quietly narrower ever since.
+  for (const header of [BULK_HEADER, MICROSOFT_HEADER]) {
+    const faults = analyse(parseHeaders(header)).filter((f) => String(f.id).startsWith('fault:'));
+    assert.deepEqual(faults, [], `a producer threw on a fixture: ${faults.map((f) => f.id).join(', ')}`);
+  }
 });

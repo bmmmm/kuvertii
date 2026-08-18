@@ -111,3 +111,26 @@ test('a file argument wins over anything on stdin', async () => {
   assert.match(stdout, /only-in-the-file@example\.net/, 'the file was read');
   assert.doesNotMatch(stdout, /maja\.beispiel/, 'and stdin was not read as well');
 });
+
+test('a report longer than a pipe buffer arrives whole', async () => {
+  // execFile gives the child a pipe, which is the case that used to fail:
+  // writes to a pipe are asynchronous, a terminal takes them synchronously,
+  // and `process.exit` discarded whatever was still buffered. A 601-hop chain
+  // came to 93,000 bytes on a terminal and 66,264 through `| cat` — the report
+  // stopped mid-sentence at hop 175, stderr was empty, and the exit code said
+  // it had worked. The last line is the assertion that matters: it is written
+  // last, so it is the first thing a truncated stream loses.
+  const lines = ['From: a@b.example', 'To: c@d.example', 'Subject: long'];
+  for (let i = 600; i >= 1; i--) {
+    lines.push(
+      `Received: from host${i}.sub${i}.example.com (host${i}.sub${i}.example.com [10.0.0.${i % 255}])`
+      + ` by mx${i}.relay.example.net with ESMTPS id abc${i}; Mon, 17 Aug 2026 09:14:02 -0700 (PDT)`,
+    );
+  }
+
+  const { code, stdout } = await cli([], lines.join('\n'));
+
+  assert.equal(code, 0);
+  assert.ok(stdout.length > 70_000, `only ${stdout.length} bytes came back`);
+  assert.match(stdout.trimEnd().split('\n').pop(), /header fields read\. Nothing left this machine\./);
+});

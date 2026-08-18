@@ -60,6 +60,56 @@ function neutraliseDisabledByMutation(text) {
     ],
   },
 
+  // ------------------------------------------------------ promises now guarded
+  {
+    id: 'fault-boundary-removed',
+    promise: 'A section that throws costs that section and nothing else.',
+    file: 'js/findings.js',
+    find: `  try {
+    return produce();
+  } catch (error) {`,
+    replace: `  return produce();
+  // eslint-disable-next-line no-unreachable
+  try {
+    return produce();
+  } catch (error) {`,
+    mustKill: ['a section that throws costs that section and nothing else'],
+  },
+
+  {
+    id: 'unguarded-signature-time',
+    promise: 'A sender-written timestamp cannot suppress the report.',
+    file: 'js/findings.js',
+    find: `  const at = new Date(Number(seconds) * 1000);
+  return Number.isNaN(at.getTime()) ? null : at;`,
+    replace: `  return new Date(Number(seconds) * 1000);`,
+    mustKill: [
+      'a timestamp too large to be a time is named, not thrown on',
+      'an expiry too large to be a time does not silently answer',
+    ],
+  },
+
+  {
+    id: 'exit-discards-buffer',
+    promise: 'A report longer than a pipe buffer arrives whole.',
+    file: 'bin/kuvertii.js',
+    find: `  (code) => { process.exitCode = code ?? 0; },`,
+    replace: `  (code) => process.exit(code ?? 0),`,
+    mustKill: ['a report longer than a pipe buffer arrives whole'],
+  },
+
+  {
+    id: 'chunk-is-one-key',
+    promise: 'Two keys arriving in one read are two keys.',
+    file: 'js/keys.js',
+    find: `  return [...String(chunk ?? '').replace(PASTE, '')];`,
+    replace: `  return [String(chunk ?? '')];`,
+    mustKill: [
+      'two keys arriving together are two keys',
+      'pasted text is data, not a burst of keypresses',
+    ],
+  },
+
   // ------------------------------------------------- promises with no gate yet
   //
   // Everything below is expected to survive today. Each one is a promise the

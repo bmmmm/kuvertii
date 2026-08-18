@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { has, normaliseHost } from '../js/bloom.js';
 import { clearClipboard, readClipboard } from '../js/clipboard.js';
 import { analyse } from '../js/findings.js';
+import { isQuit, keypresses } from '../js/keys.js';
 import { createRenderer } from '../js/terminal.js';
 import { MAX_HEADER_BYTES, parseHeaders } from '../js/unfold.js';
 
@@ -180,8 +181,8 @@ async function interactive(renderer, { wipe }) {
     // reads as a fault rather than as the thing it just announced.
     let emptiedByUs = false;
 
-    stdin.on('data', async (key) => {
-      if (key === 'q' || key === '\u0003' || key === '\u0004') { // q, Ctrl-C, Ctrl-D
+    const handle = async (key) => {
+      if (isQuit(key)) {
         restore();
         stdout.write('\n');
         resolve(0);
@@ -223,6 +224,14 @@ async function interactive(renderer, { wipe }) {
       stdout.write(`${renderer.paint('\x1b[2m', '\nSpace to read another, q to quit.')}\n`);
       stdin.setRawMode(true);
       busy = false;
+    };
+
+    // One data event can carry several keys — two typed quickly, an autorepeat,
+    // or one arriving while the loop is busy. Comparing the whole chunk against
+    // a single character dropped every key in it when that happened, q
+    // included, and q is the only documented way out.
+    stdin.on('data', async (chunk) => {
+      for (const key of keypresses(chunk)) await handle(key);
     });
   });
 }
@@ -273,10 +282,25 @@ async function main(argv) {
   return interactive(renderer, { wipe });
 }
 
+// `process.exitCode`, never `process.exit()`.
+//
+// `process.exit` terminates immediately and discards whatever is still sitting
+// in stdout's buffer. Writes to a pipe are asynchronous — a terminal takes them
+// synchronously, which is why this only ever showed up when the output was
+// redirected — so a report longer than one pipe buffer was cut off mid-sentence
+// and the process still exited 0. A 601-hop chain came to 93,000 bytes on a
+// terminal and 66,264 through `| cat`: 340 findings gone, stderr empty, exit
+// code claiming success. Setting the code and letting the loop drain naturally
+// is what makes the last line of a long report as reliable as the first.
+//
+// This works only because every path releases what it holds: `interactive`
+// pauses stdin and leaves raw mode in `restore()`, and nothing else here keeps
+// a handle open. A path that forgets would hang rather than truncate — louder,
+// and caught by test/cli.test.js, which runs the real binary to completion.
 main(process.argv).then(
-  (code) => process.exit(code ?? 0),
+  (code) => { process.exitCode = code ?? 0; },
   (error) => {
     process.stderr.write(`${error.stack ?? error}\n`);
-    process.exit(1);
+    process.exitCode = 1;
   },
 );
