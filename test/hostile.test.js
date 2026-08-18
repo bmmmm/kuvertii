@@ -8,16 +8,17 @@
 // cli.test.js and terminal.test.js run over benign fixtures, so they have never
 // once seen a hostile byte and cannot fail if the filtering is removed.
 //
-// These can. Stubbing `neutralise` to the identity function turns the six tests
+// These can. Stubbing `neutralise` to the identity function turns every test
 // under "the rule" red, which is the check that this file is a gate and not
-// decoration. The finding tests stay green under that stub by design: they
+// decoration. tools/mutations.js now performs that stub on every CI run rather
+// than leaving it as a sentence somebody is trusted to have verified. The finding tests stay green under that stub by design: they
 // cover `scanControls`, which reports what was found and does not depend on
 // what the renderer subsequently does about it.
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { neutralise, scanControls } from '../js/control.js';
+import { hasControls, neutralise, scanControls } from '../js/control.js';
 import { analyse } from '../js/findings.js';
 import { createRenderer } from '../js/terminal.js';
 import { MAX_HEADER_BYTES, parseHeaders } from '../js/unfold.js';
@@ -25,10 +26,19 @@ import { MAX_HEADER_BYTES, parseHeaders } from '../js/unfold.js';
 const ESC = '\x1b';
 const BEL = '\x07';
 
-// Anything a terminal acts on. Tab and newline are excluded deliberately: both
-// are legitimate in rendered output, and neither steers anything.
-const CONTROL_BYTE = /[\x00-\x08\x0b-\x1f\x7f]/;
-const UNICODE_CONTROL = /[\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/;
+// Anything a terminal acts on, by Unicode category rather than by a list.
+//
+// These used to be two hand-written ranges — the same two js/control.js used,
+// which meant the test could only catch what the code had already thought of.
+// The C1 block passed both. A test that shares the code's blind spot is not a
+// second opinion, so this asks Unicode instead: Cc covers C0, DEL and C1, Cf
+// the format and bidi characters including any Unicode adds later, Co and Cs
+// private use and lone surrogates, Zl and Zp the separators.
+//
+// Tab and newline are excluded deliberately: both are legitimate in rendered
+// output, and neither steers anything.
+const CONTROL_BYTE = /(?![\t\n])[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}]/u;
+const UNICODE_CONTROL = CONTROL_BYTE;
 
 const HEAD = [
   'From: Support <support@sender.example>',
@@ -130,7 +140,11 @@ test('bidi and zero-width controls never reach a value', () => {
   ));
 
   for (const rendered of out) {
-    assert.doesNotMatch(rendered, UNICODE_CONTROL);
+    // senderBytes first: with colour on, the stream also carries this tools own
+    // ANSI, and the question here is only what the header contributed. The old
+    // hand-written range happened not to include ESC, so this passed without
+    // stripping — an accident, not a decision.
+    assert.doesNotMatch(senderBytes(rendered), UNICODE_CONTROL);
   }
 });
 
@@ -299,4 +313,69 @@ test('a homoglyph dot is bracketed like a real one', () => {
   }]);
   assert.doesNotMatch(out, /evil[。．｡]com/);
   assert.equal(out.match(/evil\[\.\]com/g)?.length, 3);
+});
+
+// ------------------------------------------------------- the eight-bit forms
+
+test('the 8-bit escape introducers are neutralised like their ESC forms', () => {
+  // U+0080-U+009F is the C1 block: the same OSC, CSI, DCS and APC introducers
+  // as the two-character ESC spellings, in one codepoint. xterm honours them in
+  // UTF-8 mode by default. Both hand-written ranges this file and js/control.js
+  // used to share missed the whole block, so these bytes reached the screen and
+  // the report said nothing had been found — the two failures that make each
+  // other hard to notice.
+  const cp = (n) => String.fromCodePoint(n);
+
+  for (const [name, value] of [
+    ['OSC 52, clipboard write', `${cp(0x9d)}52;c;ZXZpbA==`],
+    ['CSI erase', `${cp(0x9b)}2J`],
+    ['CSI hide', `${cp(0x9b)}8m`],
+    ['DCS payload', `${cp(0x90)}payload`],
+  ]) {
+    assert.doesNotMatch(neutralise(value), CONTROL_BYTE, name);
+    assert.match(neutralise(value), /<U\+00[89][0-9A-F]>/, `${name} is named as a codepoint`);
+  }
+});
+
+test('an 8-bit sequence is reported, in the same words as its ESC form', () => {
+  // Neutralising without reporting is the half-fix: the reader sees <U+009D> in
+  // the output and no finding explaining what it was for.
+  const cp = (n) => String.fromCodePoint(n);
+
+  assert.deepEqual(scanControls(`x${cp(0x9d)}52;c;ZXZpbA==`), ['writes to your clipboard']);
+  assert.deepEqual(scanControls(`x${ESC}]52;c;ZXZpbA==`), ['writes to your clipboard']);
+  assert.deepEqual(scanControls(`x${cp(0x9b)}2J`), ['erases part of the screen']);
+});
+
+test('the characters the old ranges forgot are all caught now', () => {
+  const cp = (n) => String.fromCodePoint(n);
+
+  for (const [name, code] of [
+    ['line separator', 0x2028],
+    ['paragraph separator', 0x2029],
+    ['private use', 0xe000],
+    ['Mongolian vowel separator', 0x180e],
+  ]) {
+    const value = `a${cp(code)}b`;
+    assert.doesNotMatch(neutralise(value), CONTROL_BYTE, name);
+    assert.ok(scanControls(value).length, `${name} is reported, not only defused`);
+  }
+});
+
+test('what a reader legitimately sees is left exactly as it was', () => {
+  // The category set is wide, and the cost of getting it wrong is a tool that
+  // mangles the mail it exists to open. None of these are in any of the six
+  // categories, and all of them are things this project actually renders.
+  for (const value of [
+    'Antwort an: Müller & Söhne — Größe 12',
+    'À: jean@exemple.fr, Réponse à',
+    '✓ ✗ ! ○ · ▸',
+    'münchen.example / xn--mnchen-3ya.example',
+    '請求書 · 発送 📦',
+    'hxxps://evil[.]example/login',
+    'a\tb\nc',
+  ]) {
+    assert.equal(neutralise(value), value);
+    assert.equal(hasControls(value), false, value);
+  }
 });

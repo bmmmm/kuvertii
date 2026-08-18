@@ -17,22 +17,61 @@
 // header that tried to steer the reader's terminal is evidence, and discarding
 // evidence is not this tool's habit. `scanControls` turns that evidence into a
 // finding; `neutralise` is what makes printing it safe.
+//
+// ---------------------------------------------------------------------------
+//
+// What is dangerous is defined by Unicode category, not by a list kept here.
+//
+// It used to be two hand-written ranges, and a hand-written range is a bet that
+// nobody will find the character it forgot. Somebody did: the whole 8-bit C1
+// block, U+0080–U+009F, carries the same OSC, CSI, DCS and APC introducers as
+// the ESC-prefixed forms — xterm honours them in UTF-8 mode by default — and
+// none of them were in either range. They passed through untouched, and because
+// the same ranges also drove `hasControls`, the report additionally said
+// nothing had been found. U+2028, private-use characters and U+180E went the
+// same way.
+//
+// Categories close that class rather than that instance:
+//
+//   Cc  control (C0, DEL, and the C1 block that started this)
+//   Cf  format — bidi overrides, zero-width joiners, U+FEFF, and whatever
+//       Unicode adds next, which is the part a list can never have
+//   Co  private use — renders as whatever the reader's font decides
+//   Cs  surrogates, which only appear here unpaired and therefore broken
+//   Zl  line separator, Zp paragraph separator
+//
+// The definition is now maintained by Unicode rather than by us. Measured
+// before adopting it: German and French field values, `✓ ✗ ! ○ ▸ ·`, IDN
+// hostnames, CJK subjects and emoji all pass through untouched, because none of
+// them are in any of those categories — and every hostile case above is caught.
+//
+// Tab and newline are spared: both are ordinary inside a decoded multi-line
+// payload, and neither steers a terminal. Carriage return is NOT spared — on
+// its own it returns the cursor to column zero, which is how a line already
+// printed gets overwritten by the next one.
 
-// C0 and DEL, minus the two that carry meaning in a value we display: tab, and
-// the newline that separates the lines of a decoded multi-line payload.
-// Carriage return is NOT spared — on its own it returns the cursor to column
-// zero, which is how a line already printed gets overwritten by the next one.
-const C0_AND_DEL = /[\x00-\x08\x0b-\x1f\x7f]/;
+const HOSTILE = /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}]/u;
+const HOSTILE_G = new RegExp(HOSTILE.source, 'gu');
+const SPARED = new Set(['\t', '\n']);
 
-// Format and bidi controls. These are legal Unicode with legitimate uses in
-// running prose, and none at all inside a hostname, a message id or a list
-// name — which is the only kind of text this module ever sees.
-const UNICODE_CONTROLS = /[\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/;
+const ESC = '\u001B';
 
-const C0_AND_DEL_G = new RegExp(C0_AND_DEL.source, 'g');
-const UNICODE_CONTROLS_G = new RegExp(UNICODE_CONTROLS.source, 'g');
-
-const ESC = '\x1b';
+/**
+ * The 8-bit forms of the escape introducers, and their two-character spellings.
+ *
+ * `ESC [` and U+009B mean the same thing to a terminal that decodes C1, so the
+ * cheapest correct way to describe what a C1 sequence would do is to rewrite it
+ * as the ESC form and let the table below answer. One vocabulary, not two.
+ */
+const C1_INTRODUCERS = new Map([
+  ['\u009B', `${ESC}[`],
+  ['\u009D', `${ESC}]`],
+  ['\u0090', `${ESC}P`],
+  ['\u009E', `${ESC}^`],
+  ['\u009F', `${ESC}_`],
+  ['\u009C', `${ESC}\\`],
+  ['\u0098', `${ESC}X`],
+]);
 
 /**
  * What an escape sequence would have done, matched against the text following
@@ -60,18 +99,23 @@ const SEQUENCES = [
   [/^/, 'starts a sequence this tool could not identify'],
 ];
 
-const BIDI = /[\u061C\u202A-\u202E\u2066-\u2069]/;
-const INVISIBLE = /[\u200B-\u200F\u2060-\u2064\uFEFF]/;
+const BIDI = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/;
+const INVISIBLE = /[\u200B\u200C\u200D\u2060-\u2064\uFEFF\u180E]/;
+const SEPARATOR = /[\u2028\u2029]/;
+const PRIVATE_USE = /[\p{Co}\p{Cs}]/u;
 // C0 that is neither the escape introducer nor a carriage return — those two
 // are described in their own words below, and would otherwise be counted twice.
-const OTHER_C0 = /[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f]/;
+const OTHER_C0 = /[\u0000-\u0008\u000B\u000C\u000E-\u001A\u001C-\u001F\u007F]/;
 
 /**
  * Rewrite control characters into something inert and legible.
  *
  * `<1b>` rather than a caret: `^[` is itself two characters some terminals can
  * be configured to interpret, and the hex form names the exact byte that was
- * there, which is what a reader comparing two headers actually needs.
+ * there, which is what a reader comparing two headers actually needs. Anything
+ * above the ASCII range is named as a codepoint instead, because there is no
+ * single byte to name — U+009B is two bytes in UTF-8, and `<9b>` would be a
+ * quietly wrong description of what was in the file.
  *
  * Neutralising the introducer is sufficient on its own. With the ESC rewritten,
  * the remainder of the sequence is ordinary text that no terminal acts on — so
@@ -79,18 +123,23 @@ const OTHER_C0 = /[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f]/;
  * risk of a novel sequence slipping past a parser that did not expect it.
  */
 export function neutralise(text) {
-  return String(text ?? '')
-    .replace(C0_AND_DEL_G, (ch) => `<${ch.codePointAt(0).toString(16).padStart(2, '0')}>`)
-    .replace(
-      UNICODE_CONTROLS_G,
-      (ch) => `<U+${ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}>`,
-    );
+  return String(text ?? '').replace(HOSTILE_G, (ch) => {
+    if (SPARED.has(ch)) return ch;
+    const code = ch.codePointAt(0);
+    return code < 0x80
+      ? `<${code.toString(16).padStart(2, '0')}>`
+      : `<U+${code.toString(16).toUpperCase().padStart(4, '0')}>`;
+  });
 }
 
 /** Does this string carry anything `neutralise` would rewrite? */
 export function hasControls(text) {
   const value = String(text ?? '');
-  return C0_AND_DEL.test(value) || UNICODE_CONTROLS.test(value);
+  if (!HOSTILE.test(value)) return false;
+  // Tab and newline match the category and are left alone, so their presence
+  // alone is not a finding — `neutralise` and this must agree exactly, or the
+  // report announces an attack it then declines to point at.
+  return [...value].some((ch) => !SPARED.has(ch) && HOSTILE.test(ch));
 }
 
 /**
@@ -105,18 +154,31 @@ export function scanControls(text) {
   const effects = [];
   const add = (effect) => { if (effect && !effects.includes(effect)) effects.push(effect); };
 
+  // C1 introducers first, rewritten to their ESC spelling so that one table
+  // answers for both forms. Without this the 8-bit sequences were neutralised
+  // and never named, which is the half of the fix that is easy to forget: the
+  // reader would see `<U+009D>` in the output and no finding explaining it.
+  let normalised = value;
+  for (const [c1, escaped] of C1_INTRODUCERS) {
+    if (normalised.includes(c1)) normalised = normalised.split(c1).join(escaped);
+  }
+
   // Each introducer is classified separately: one value can carry a colour
   // change and a clipboard write, and naming only the first would understate it
   // by exactly the part that matters.
-  if (value.includes(ESC)) {
-    for (const body of value.split(ESC).slice(1)) {
+  if (normalised.includes(ESC)) {
+    for (const body of normalised.split(ESC).slice(1)) {
       add(SEQUENCES.find(([pattern]) => pattern.test(body))?.[1]);
     }
   }
   if (BIDI.test(value)) add('reverses the direction the text is read in');
   if (INVISIBLE.test(value)) add('inserts characters that render as nothing at all');
+  if (SEPARATOR.test(value)) add('breaks the line where no line break was written');
+  if (PRIVATE_USE.test(value)) add('uses characters with no agreed meaning, which every font renders differently');
   if (value.includes('\r')) add('returns the cursor to the start of the line, overwriting it');
   if (OTHER_C0.test(value)) add('carries control bytes a terminal may act on');
+  // Anything in the C1 block that is not one of the named introducers.
+  if (/[\u0080-\u009F]/.test(value) && !effects.length) add('carries control bytes a terminal may act on');
 
   return effects;
 }

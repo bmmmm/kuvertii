@@ -179,6 +179,35 @@ function neutraliseDisabledByMutation(text) {
     ],
   },
 
+  {
+    id: 'controls-listed-not-categorised',
+    promise: 'Every control and format character is caught, not a list of them.',
+    file: 'js/control.js',
+    find: `const HOSTILE = /[\\p{Cc}\\p{Cf}\\p{Co}\\p{Cs}\\p{Zl}\\p{Zp}]/u;`,
+    replace: `const HOSTILE = /[\\x00-\\x08\\x0b-\\x1f\\x7f\\u061C\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u2064\\u2066-\\u2069\\uFEFF]/u;`,
+    mustKill: [
+      'the 8-bit escape introducers are neutralised like their ESC forms',
+      'the characters the old ranges forgot are all caught now',
+    ],
+    // The exact two ranges this file used to carry. They are the reason the
+    // whole C1 block, U+2028, private use and U+180E reached the screen while
+    // the report said nothing had been found.
+  },
+
+  {
+    id: 'c1-neutralised-but-unreported',
+    promise: 'A sequence that is defused is also named.',
+    file: 'js/control.js',
+    find: `  let normalised = value;
+  for (const [c1, escaped] of C1_INTRODUCERS) {
+    if (normalised.includes(c1)) normalised = normalised.split(c1).join(escaped);
+  }`,
+    replace: `  const normalised = value;`,
+    mustKill: ['an 8-bit sequence is reported, in the same words as its ESC form'],
+    // Neutralising without reporting is the half-fix that hides itself: the
+    // reader sees <U+009D> in the output and no finding explaining it.
+  },
+
   // ------------------------------------------------- promises with no gate yet
   //
   // Everything below is expected to survive today. Each one is a promise the
