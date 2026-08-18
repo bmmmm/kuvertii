@@ -240,6 +240,7 @@ the blocklist.
 ```sh
 node --test                          # 258 tests, stdlib only
 node tools/mutate.mjs                # breaks each promise, checks the suite notices
+node tools/promises.mjs              # what is promised, and what would catch it breaking
 node tools/build-blocklist.mjs       # writes data/ (gitignored, built in CI)
 node tools/build-psl.mjs             # refreshes js/psl.js (committed)
 node tools/serve.mjs                 # then open 127.0.0.1:8000
