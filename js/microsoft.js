@@ -4,6 +4,7 @@
 // instead of inside findings.js: the header names and codes are Microsoft's,
 // and the only work done here is translating them into sentences.
 
+import { clip } from './decode.js';
 import { emptyTable, table } from './lookup.js';
 import { get } from './unfold.js';
 
@@ -110,6 +111,43 @@ export function filedAsUnwanted(headers) {
   return Boolean(category && SPAM_VERDICTS[category]?.[1] === 'bad');
 }
 
+/**
+ * One of Microsoft's numeric scores, or null when the field does not hold one.
+ *
+ * Both scores were read with `Number()` and then walked down a chain of `<=`
+ * comparisons. Every comparison against NaN is false, so a field holding
+ * anything that is not a number fell through the whole chain into its last
+ * branch — and the last branch is the most severe reading each score has.
+ * `SCL:abc` printed "Scored as spam with high confidence", and `BCL:xyz`
+ * printed "Bulk mail that recipients complain about often", the latter without
+ * even the caution mark that a genuine high score carries. A verdict about the
+ * message, asserted from a field that made no such claim.
+ *
+ * The range is checked as well as the type, for the same reason: Microsoft
+ * defines SCL as -1 to 9 and BCL as 0 to 9, and `SCL:-5` read as "Scored as
+ * not spam" because it satisfied `n <= 1`. A value outside the vocabulary is
+ * not the nearest value inside it.
+ *
+ * The pattern is `signatureTime` in js/findings.js: return null, and let the
+ * caller say the field is not a score rather than invent a reading for it.
+ */
+function score(raw, { min, max }) {
+  const text = String(raw ?? '').trim();
+  if (!/^-?\d+$/.test(text)) return null;
+  const value = Number(text);
+  return value >= min && value <= max ? value : null;
+}
+
+/** The row for a score field whose contents are not one of its defined values. */
+function unreadableScore(name, raw, range) {
+  return {
+    label: `${name} ${clip(raw, 40)}`,
+    value: `Not one of the values this score is defined to take (${range}), so nothing about the message can be read from it.`,
+    note: 'Microsoft writes this field. A value outside its own vocabulary means either that the field was not written by the filter, or that it was altered after it was.',
+    level: 'caution',
+  };
+}
+
 /** Verdict items from the Microsoft 365 anti-spam headers, or [] when absent. */
 export function microsoftVerdicts(headers) {
   const forefront = parseReport(get(headers, 'x-forefront-antispam-report'));
@@ -117,8 +155,11 @@ export function microsoftVerdicts(headers) {
   const items = [];
 
   const scl = forefront.SCL ?? get(headers, 'x-ms-exchange-organization-scl');
-  if (scl !== undefined && scl !== '') {
-    const n = Number(scl);
+  if (scl !== undefined && String(scl).trim() !== '') {
+    const n = score(scl, { min: -1, max: 9 });
+    if (n === null) {
+      items.push(unreadableScore('Spam Confidence Level', scl, '-1 to 9'));
+    } else {
     const meaning =
       n === -1 ? 'Filtering was skipped entirely, so this score reflects a rule rather than an inspection.'
         : n <= 1 ? 'Scored as not spam.'
@@ -134,13 +175,14 @@ export function microsoftVerdicts(headers) {
       note: 'Microsoft states that on cloud mailboxes this score does not determine whether a message is treated as spam — the category below does. It survives for on-premises Exchange.',
       level: n === -1 ? 'caution' : null,
     });
+    }
   }
 
   const bcl = antispam.BCL ?? forefront.BCL;
-  if (bcl !== undefined && bcl !== '') {
-    const n = Number(bcl);
-    items.push({
-      label: `Bulk Complaint Level ${bcl}`,
+  if (bcl !== undefined && String(bcl).trim() !== '') {
+    const n = score(bcl, { min: 0, max: 9 });
+    items.push(n === null ? unreadableScore('Bulk Complaint Level', bcl, '0 to 9') : {
+      label: `Bulk Complaint Level ${n}`,
       value: n === 0
         ? 'Not sent in bulk.'
         : n <= 3 ? 'Bulk mail that few recipients complain about.'

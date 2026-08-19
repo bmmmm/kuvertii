@@ -1446,14 +1446,40 @@ function authFinding(headers) {
     // passed" stops meaning "the message is intact". Rare in ordinary mail and
     // worth naming when it appears, but reported as a property of the signature
     // rather than as an accusation — some legitimate mailing lists set it.
+    //
+    // `\d+` has no upper bound and `Number` does. A 25-digit length printed as
+    // 10,000,000,000,000,000,000,000,000 — a figure that was not in the header,
+    // because everything past 2^53 rounds — and 400 digits printed as "∞ bytes".
+    // Neither is a length, and saying so beats printing a number the message
+    // never carried. The same answer `signatureTime` gives to the same shape.
+    //
+    // `l=0` is the opposite mistake. It is the most serious value the tag can
+    // take — no part of the body is signed, so all of it can be replaced while
+    // the signature keeps verifying — and "covers the first 0 bytes of the
+    // body" was the mildest sentence on the card.
     const signedLength = signature.match(/\bl=(\d+)/)?.[1];
-    if (signedLength) {
-      collect(rows, {
-        label: forSignature('Only part of the message is signed', domain),
-        value: `The signature covers the first ${Number(signedLength).toLocaleString('en')} bytes of the body.`,
-        note: 'Anything after that can be added without invalidating it, so a passing DKIM result does not vouch for the whole message.',
-        level: 'caution',
-      });
+    if (signedLength !== undefined) {
+      const bytes = Number(signedLength);
+      collect(rows, !Number.isSafeInteger(bytes)
+        ? {
+          label: forSignature('The signed length is not a length', domain),
+          value: `l=${clip(signedLength, 40)}`,
+          level: 'caution',
+          note: 'Too large to be a count of bytes, so nothing can be read from it about how much of the message this signature covers. Read it as a signature whose coverage is unstated, not as one that covers a great deal.',
+        }
+        : bytes === 0
+          ? {
+            label: forSignature('None of the message body is signed', domain),
+            value: 'The signature sets l=0, so it covers zero bytes of the body. The whole of it can be replaced without invalidating the signature.',
+            note: 'The length tag bounds what a signature vouches for, and at zero it vouches for nothing but the headers it names — while still verifying. "DKIM passed" then says nothing whatever about the message you are reading.',
+            level: 'caution',
+          }
+          : {
+            label: forSignature('Only part of the message is signed', domain),
+            value: `The signature covers the first ${bytes.toLocaleString('en')} bytes of the body.`,
+            note: 'Anything after that can be added without invalidating it, so a passing DKIM result does not vouch for the whole message.',
+            level: 'caution',
+          });
     }
 
     // An expiry is the industry's main answer to DKIM replay — a spammer taking

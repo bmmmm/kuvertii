@@ -1098,3 +1098,70 @@ test('ordinary mail does not trip the last-hop check', () => {
     );
   }
 });
+
+test('a score that is not a score is not read as the worst one', () => {
+  // Both Microsoft scores were read with `Number()` and then walked down a
+  // chain of `<=`. Every comparison against NaN is false, so a field holding
+  // anything but a number fell through the whole chain into its last branch —
+  // and the last branch is the most severe reading each score has. The tool
+  // asserted a verdict from a field that had made no such claim, in the
+  // sender's disfavour, which is still the tool being wrong.
+  const judgement = (report) =>
+    analyse(parseHeaders(`From: a@b.example\nX-Forefront-Antispam-Report: ${report}`))
+      .find((f) => f.id === 'judgement');
+
+  const scl = judgement('CIP:1.2.3.4;SCL:abc').items[0];
+  assert.match(scl.value, /Not one of the values/);
+  assert.doesNotMatch(scl.value, /high confidence/);
+  assert.equal(scl.level, 'caution');
+
+  const bcl = judgement('CIP:1.2.3.4;BCL:xyz').items[0];
+  assert.match(bcl.value, /Not one of the values/);
+  assert.doesNotMatch(bcl.value, /complain about often/);
+
+  // The range is checked as well as the type, for the same reason: `SCL:-5`
+  // satisfied `n <= 1` and read as "Scored as not spam". A value outside the
+  // vocabulary is not the nearest value inside it.
+  assert.match(judgement('SCL:-5').items[0].value, /Not one of the values/);
+  assert.match(judgement('SCL:99').items[0].value, /Not one of the values/);
+
+  // And every defined value still reads exactly as it did.
+  const reads = (report) => judgement(report).items[0].value;
+  assert.match(reads('SCL:-1'), /Filtering was skipped entirely/);
+  assert.match(reads('SCL:1'), /Scored as not spam/);
+  assert.match(reads('SCL:4'), /no verdict either way/);
+  assert.match(reads('SCL:5'), /Scored as spam\./);
+  assert.match(reads('SCL:9'), /high confidence/);
+  assert.match(reads('BCL:0'), /Not sent in bulk/);
+  assert.match(reads('BCL:9'), /complain about often/);
+});
+
+test('a signed length that is not a length is not printed as a figure', () => {
+  // `l=` is matched by `\d+`, which has no upper bound, and read by `Number`,
+  // which does. A 25-digit length printed as 10,000,000,000,000,000,000,000,000
+  // — a figure that was not in the header, because everything past 2^53 rounds
+  // — and 400 digits printed as "the first ∞ bytes of the body".
+  const row = (l) => analyse(parseHeaders(
+    `From: a@b.example\nDKIM-Signature: v=1; a=rsa-sha256; d=b.example; l=${l}; b=X`,
+  )).find((f) => f.id === 'auth').items.find((i) => !/Signed by domain/.test(i.label));
+
+  for (const huge of ['9'.repeat(25), '9'.repeat(400), '9007199254740993']) {
+    const it = row(huge);
+    assert.match(it.label, /not a length/);
+    assert.doesNotMatch(it.value, /∞/, 'no infinity is printed as a byte count');
+    assert.doesNotMatch(it.value, /bytes of the body/);
+    assert.equal(it.level, 'caution');
+  }
+
+  // l=0 is the opposite mistake: the most serious value the tag can take — no
+  // part of the body is signed, so all of it can be replaced while the
+  // signature keeps verifying — described by the mildest sentence on the card.
+  const zero = row('0');
+  assert.match(zero.label, /None of the message body is signed/);
+  assert.equal(zero.level, 'caution');
+
+  // Ordinary lengths still read exactly as they did, up to the last one that
+  // survives the round trip.
+  assert.match(row('42').value, /first 42 bytes/);
+  assert.match(row('9007199254740991').value, /9,007,199,254,740,991 bytes/);
+});

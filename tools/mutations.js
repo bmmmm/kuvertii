@@ -524,6 +524,45 @@ function el(tag, className, text) {
   },
 
   {
+    id: 'score-falls-through-to-the-worst-branch',
+    promise: 'A score field that holds no score is not read as the highest one.',
+    file: 'js/microsoft.js',
+    find: `  if (!/^-?\\d+$/.test(text)) return null;
+  const value = Number(text);
+  return value >= min && value <= max ? value : null;`,
+    replace: `  return Number(text);`,
+    mustKill: ['a score that is not a score is not read as the worst one'],
+    // The replacement is what the code did: `Number()` and a chain of `<=`,
+    // where every comparison against NaN is false and the chain ends in the
+    // most severe reading the score has.
+  },
+
+  {
+    id: 'zero-length-reads-as-partial',
+    promise: 'A signature covering none of the body says so, rather than counting to zero.',
+    file: 'js/findings.js',
+    find: `        : bytes === 0
+          ? {
+            label: forSignature('None of the message body is signed', domain),`,
+    replace: `        : false
+          ? {
+            label: forSignature('None of the message body is signed', domain),`,
+    mustKill: ['a signed length that is not a length is not printed as a figure'],
+    // Separate from `signed-length-unbounded` because it is a separate promise:
+    // that one is about a value too large to mean anything, this one about the
+    // smallest value the tag can take being the most serious.
+  },
+
+  {
+    id: 'signed-length-unbounded',
+    promise: 'A length too large to be a length is named, not printed as a figure.',
+    file: 'js/findings.js',
+    find: `      collect(rows, !Number.isSafeInteger(bytes)`,
+    replace: `      collect(rows, false`,
+    mustKill: ['a signed length that is not a length is not printed as a figure'],
+  },
+
+  {
     id: 'address-literal-ipv4-only',
     promise: 'A link to a bare address is named whichever family the address is from.',
     file: 'js/links.js',
