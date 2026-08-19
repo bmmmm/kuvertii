@@ -47,6 +47,24 @@ test('hostnames are normalised identically on both sides', () => {
   assert.equal(normaliseHost(null), '');
 });
 
+test('an address literal survives normalisation intact', () => {
+  // The port strip read ":digits at the end" and the bracket strip removed the
+  // two brackets independently, so `[2001:db8::1]` lost its last hextet and
+  // `[::1]:8080` kept a bracket — and the mangled string was then reported on
+  // as if it were the host the reader asked about. The whole IPv6 family, not
+  // just the reported case: with and without port, with and without brackets,
+  // loopback, IPv4-mapped.
+  assert.equal(normaliseHost('[2001:db8::1]'), '2001:db8::1');
+  assert.equal(normaliseHost('[2001:db8::1]:443'), '2001:db8::1');
+  assert.equal(normaliseHost('[::1]:8080'), '::1');
+  assert.equal(normaliseHost('::1'), '::1');
+  assert.equal(normaliseHost('2001:db8::1'), '2001:db8::1');
+  assert.equal(normaliseHost('[::ffff:203.0.113.5]'), '::ffff:203.0.113.5');
+  // The still-must-work side: a real port on a name or an IPv4 literal.
+  assert.equal(normaliseHost('192.0.2.7:8443'), '192.0.2.7');
+  assert.equal(normaliseHost('evil.example:8080'), 'evil.example');
+});
+
 test('a host absent from an empty filter is reported absent', () => {
   const { bytes, bits, hashes } = build(['only.example']);
   assert.ok(!has(bytes, 'something-else.example', bits, hashes));

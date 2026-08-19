@@ -139,3 +139,55 @@ test('a miss says plainly that it is not an all-clear', () => {
   assert.match(row.value, /not a clean bill of health/);
   assert.equal(row.level, undefined, 'a miss is not a verdict');
 });
+
+// "We could not check" and "we checked and it was fine" must never produce the
+// same sentence. Three shapes of input used to fall out of the label walk with
+// zero probes and still render "is not in the blocklist snapshot" — a miss the
+// filter had no basis for, phrased exactly like one it did.
+
+test('an IPv6 literal is reported as unchecked, never as absent', () => {
+  const snap = buildFilter(1000);
+
+  // The IPv4-mapped form matters here: it contains dots, so without the colon
+  // test it would fall into the label walk and come back as an ordinary miss.
+  for (const input of ['[2001:db8::1]', '[::1]:8080', '::1', '[::ffff:203.0.113.5]']) {
+    const result = lookup(snap, input);
+    assert.equal(result.unchecked, true, `${input} cannot be in a hostname filter`);
+    assert.equal(result.probes, 0);
+    assert.equal(result.listed, undefined);
+
+    const [row] = verdictRows([result]);
+    assert.match(row.label, /No blocklist check was made/);
+    assert.doesNotMatch(row.label, /not in the blocklist snapshot/);
+    assert.doesNotMatch(`${row.label} ${row.value}`, /\bclean\b|\bsafe\b/i);
+  }
+});
+
+test('a single-label name is reported as unchecked, never as absent', () => {
+  const snap = buildFilter(1000);
+  const result = lookup(snap, 'localhost');
+
+  assert.equal(result.unchecked, true);
+  assert.equal(result.probes, 0);
+  assert.match(verdictRows([result])[0].label, /No blocklist check was made/);
+});
+
+test('an IPv4 literal gets one exact probe and no label walk', () => {
+  // The walk treats dots as label boundaries, but `0.2.7` is not the parent of
+  // `192.0.2.7` — it is three octets. Walking would have raised the printed
+  // false-alarm odds for a question the filter was never asked.
+  const snap = buildFilter(1000);
+  const miss = lookup(snap, '192.0.2.7');
+  assert.equal(miss.probes, 1, 'one exact probe, not a walk over the octets');
+  assert.equal(miss.listed, false);
+
+  // The still-must-fire side: an IPv4 literal the feed actually lists.
+  const { bits, hashes } = snap.meta;
+  const bytes = Uint8Array.from(snap.bytes);
+  add(bytes, '203.0.113.66', bits, hashes);
+  const listedSnap = validate({ ...snap.meta }, bytes);
+  const hit = lookup(listedSnap, '203.0.113.66:8443');
+  assert.equal(hit.listed, true);
+  assert.equal(hit.matched, '203.0.113.66');
+  assert.equal(hit.probes, 1);
+});

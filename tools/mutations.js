@@ -583,4 +583,51 @@ function el(tag, className, text) {
     // The test now binds an ephemeral port and asks the socket, because reading
     // the constant would pass just as happily once `listen` stopped using it.
   },
+
+  {
+    id: 'port-strip-eats-hextet',
+    promise: 'An address literal survives normalisation as the address it is.',
+    file: 'js/bloom.js',
+    find: `  const stripped = /^[^:]+:\\d+$/.test(text) ? text.replace(/:\\d+$/, '') : text;`,
+    replace: `  const stripped = text.replace(/:\\d+$/, '');`,
+    mustKill: ['an address literal survives normalisation intact'],
+    // The original. ":digits at the end" is a port on a hostname and the last
+    // hextet on an IPv6 literal, so `::1` normalised to `:` and the report
+    // named a host nobody asked about.
+  },
+
+  {
+    id: 'ipv6-probed-anyway',
+    promise: 'A question the filter cannot hold an answer to is not answered from it.',
+    file: 'js/snapshot.js',
+    find: `  if (host.includes(':')) {`,
+    replace: `  if (false) {`,
+    mustKill: ['an IPv6 literal is reported as unchecked, never as absent'],
+    // Removing the branch sends an IPv4-mapped literal into the label walk,
+    // where its dots read as label boundaries and the zero-basis miss comes
+    // back phrased like a real one.
+  },
+
+  {
+    id: 'single-label-zero-probe-miss',
+    promise: 'Zero probes never produce the sentence a real miss earns.',
+    file: 'js/snapshot.js',
+    find: `  if (labels.length < 2) {`,
+    replace: `  if (false) {`,
+    mustKill: ['a single-label name is reported as unchecked, never as absent'],
+    // The original, by omission: `localhost` fell out of the walk with zero
+    // probes and still rendered "is not in the blocklist snapshot".
+  },
+
+  {
+    id: 'ipv4-walked-over-octets',
+    promise: 'An IPv4 literal is asked of the filter exactly, not walked like a name.',
+    file: 'js/snapshot.js',
+    find: `  if (IPV4_RE.test(host)) {`,
+    replace: `  if (false) {`,
+    mustKill: ['an IPv4 literal gets one exact probe and no label walk'],
+    // Without the branch, `192.0.2.7` makes three probes — one of them asking
+    // whether `0.2.7` is a phishing domain — and the printed false-alarm odds
+    // are computed for questions that were never worth asking.
+  },
 ];

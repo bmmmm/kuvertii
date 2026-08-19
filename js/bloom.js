@@ -66,13 +66,28 @@ export function has(bytes, key, bits, hashes) {
  *
  * The blocklist stores bare hostnames, lowercase, no trailing dot, no port.
  * Both sides must agree exactly or every lookup silently misses.
+ *
+ * IPv6 literals are the case the two obvious regexes get wrong. Stripping
+ * ":digits" off the end of `[2001:db8::1]` eats the last hextet, and stripping
+ * a leading `[` and a trailing `]` independently leaves the closing bracket
+ * standing whenever a port follows it. What came out — `2001:db8:`, `::1]` —
+ * was then reported on as if it were the host the reader asked about. The
+ * brackets are a unit: URL syntax adds them precisely so a port can follow an
+ * address that is itself full of colons.
  */
 export function normaliseHost(host) {
-  return String(host ?? '')
-    .toLowerCase()
-    .trim()
-    .replace(/^\[|\]$/g, '')
-    .replace(/:\d+$/, '')
+  const text = String(host ?? '').toLowerCase().trim();
+
+  // A bracketed literal: the address is exactly what is between the brackets,
+  // and nothing after them but an optional port is well-formed.
+  const bracketed = text.match(/^\[([^\][]*)\](?::\d+)?$/);
+  if (bracketed) return bracketed[1];
+
+  // A bare IPv6 literal has more than one colon and no port; only a single
+  // colon followed by digits at the end is a port worth removing.
+  const stripped = /^[^:]+:\d+$/.test(text) ? text.replace(/:\d+$/, '') : text;
+
+  return stripped
     .replace(/\.$/, '')
     .replace(/^www\./, '');
 }

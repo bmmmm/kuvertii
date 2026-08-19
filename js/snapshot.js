@@ -57,6 +57,11 @@ export function validate(meta, bytes) {
   return Object.freeze({ meta, bytes, [CHECKED]: true });
 }
 
+// Dotted quad, for deciding how to look an IPv4 literal up — not for deciding
+// whether a URL hostname is a literal, which is js/links.js's question and has
+// already been answered by the time a host reaches this file.
+const IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+
 /**
  * Look one hostname up, and report how hard it had to look.
  *
@@ -65,6 +70,22 @@ export function validate(meta, bytes) {
  * parent. `probes` is the number of Bloom queries that actually happened, and
  * it is returned rather than recomputed because every honest statement about
  * the false-alarm rate depends on it.
+ *
+ * Three shapes of input never earn a walk, and saying so beats pretending:
+ *
+ * An IPv6 literal cannot be in the filter at all — the builder admits only
+ * dotted hostnames, and a colon never passes its shape check — so probing
+ * would be a gate that cannot fire, and its miss would read like a verdict.
+ * The result says "no check was made" instead, because that is what happened.
+ *
+ * An IPv4 literal may be listed verbatim, but walking up its labels is
+ * meaningless: `0.2.7` is not the parent of `192.0.2.7`, it is three octets.
+ * One exact probe answers the only question the filter can be asked.
+ *
+ * A single-label name (`localhost`) used to fall out of the loop with zero
+ * probes and still report "not in the blocklist snapshot" — a miss with no
+ * basis, phrased exactly like one with a basis, which is the precise class
+ * `validate` above exists to keep out.
  */
 export function lookup(snapshot, hostname) {
   if (!snapshot?.[CHECKED]) {
@@ -72,9 +93,38 @@ export function lookup(snapshot, hostname) {
   }
   const { bytes, meta } = snapshot;
   const host = normaliseHost(hostname);
-  if (!host) return { host, listed: false, probes: 0 };
+  if (!host) {
+    return { host, unchecked: true, probes: 0, why: 'Nothing was left of this hostname after normalising it, so there was nothing to look up.', meta };
+  }
+
+  if (host.includes(':')) {
+    return {
+      host,
+      unchecked: true,
+      probes: 0,
+      why: 'This is an IPv6 address, and the snapshot lists hostnames — an address of this kind cannot appear in it, so no probe was made.',
+      meta,
+    };
+  }
+
+  if (IPV4_RE.test(host)) {
+    const listed = has(bytes, host, meta.bits, meta.hashes);
+    return listed
+      ? { host, listed: true, matched: host, probes: 1, meta }
+      : { host, listed: false, probes: 1, meta };
+  }
 
   const labels = host.split('.');
+  if (labels.length < 2) {
+    return {
+      host,
+      unchecked: true,
+      probes: 0,
+      why: 'The snapshot lists dotted hostnames only, so a single-label name cannot appear in it and no probe was made.',
+      meta,
+    };
+  }
+
   let probes = 0;
   for (let i = 0; i + 1 < labels.length; i++) {
     const candidate = labels.slice(i).join('.');
@@ -120,6 +170,16 @@ export function verdictRows(results) {
         label: `Blocklist check unavailable (${result.host})`,
         value: result.why ?? 'No check was made.',
         level: 'caution',
+      };
+    }
+
+    // Not a failure and not a miss: the filter is fine, it just cannot hold an
+    // answer for this kind of name. Rendered as its own sentence because "is
+    // not in the blocklist snapshot" implies somebody looked, and nobody did.
+    if (result.unchecked) {
+      return {
+        label: `No blocklist check was made for ${result.host}`,
+        value: `${result.why} This says nothing either way about the host.`,
       };
     }
 
