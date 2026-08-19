@@ -33,6 +33,22 @@ function candidates(table) {
 }
 
 /**
+ * A read failure that is about the content, not about the tool.
+ *
+ * Overflowing maxBuffer raises ENOBUFS, and reporting that as "no clipboard
+ * tool worked" sends the reader to the wrong repair: the tool worked, the
+ * clipboard held more than any header reaches. Two different causes must not
+ * share one sentence — and trying the next tool would be dishonest too, since
+ * the next tool reads the same clipboard.
+ */
+export function contentFailure(error) {
+  if (error?.code !== 'ENOBUFS') return null;
+  return {
+    error: 'The clipboard holds more than 32 MB, which no header reaches. Copy just the header block and try again.',
+  };
+}
+
+/**
  * Read the clipboard.
  *
  * Returns {text} on success, or {error} naming what to install — several Linux
@@ -47,6 +63,8 @@ export function readClipboard() {
       // Received chains push real-world messages past the 1 MB default.
       return { text: execFileSync(command, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }) };
     } catch (error) {
+      const aboutContent = contentFailure(error);
+      if (aboutContent) return aboutContent;
       tried.push(`${command} (${error.code ?? error.message})`);
     }
   }

@@ -620,6 +620,82 @@ function el(tag, className, text) {
   },
 
   {
+    id: 'clip-note-never-written',
+    promise: 'Input cut at the ceiling is announced wherever the tally is printed.',
+    file: 'js/unfold.js',
+    find: `  if (originalLength <= MAX_HEADER_BYTES) return '';`,
+    replace: `  return '';`,
+    mustKill: [
+      'input cut at the ceiling says so, and an uncut input says nothing',
+      'input cut at the ceiling is announced, not silently tallied',
+    ],
+  },
+
+  {
+    id: 'cli-clips-in-silence',
+    promise: 'The command announces the cut in the same breath as the tally.',
+    file: 'bin/kuvertii.js',
+    find: '${skippedNote(skipped)}${clipped} Nothing left this machine.',
+    replace: '${skippedNote(skipped)} Nothing left this machine.',
+    mustKill: ['input cut at the ceiling is announced, not silently tallied'],
+    // The original. The page carried the note and the command did not — two
+    // copies of one claim, one of them lost. The wording now lives in
+    // clippedNote and both renderers print what it returns.
+  },
+
+  {
+    id: 'received-spf-always-receivers-words',
+    promise: 'A field is quoted as the receiver\'s words only where a receiver would have put it.',
+    file: 'js/findings.js',
+    find: `      const below = firstHop !== -1 && headers.indexOf(receivedSpfField) > firstHop;`,
+    replace: `      const below = false;`,
+    mustKill: ['a Received-SPF below a Received is not quoted as the receiver\'s words'],
+    // The original, in effect: the note always read "The receiving server's
+    // own words" — for a field a sender writes in one line.
+  },
+
+  {
+    id: 'forefront-position-unread',
+    promise: 'A Microsoft filter report written before the last hop is marked as such.',
+    file: 'js/microsoft.js',
+    find: `  if (reports.length && firstHop !== -1 && headers.indexOf(reports[0]) > firstHop) {`,
+    replace: `  if (false) {`,
+    mustKill: ['a forefront report below a Received is marked as an earlier hop\'s'],
+  },
+
+  {
+    id: 'forefront-second-copy-invisible',
+    promise: 'A second filter report is named, never silently unreachable.',
+    file: 'js/microsoft.js',
+    find: `  if (reports.length > 1) {`,
+    replace: `  if (false) {`,
+    mustKill: ['a second forefront report is named, not silently unreachable'],
+    // The probe put a fabricated CAT:NONE above Microsoft's real CAT:PHSH and
+    // the phishing verdict was not merely unreported but unreachable.
+  },
+
+  {
+    id: 'return-path-disagreement-swallowed',
+    promise: 'Two bounce addresses on one message are pointed out, not first-wins resolved.',
+    file: 'js/findings.js',
+    find: `  if (new Set(returnPaths.map((v) => v.trim().toLowerCase())).size > 1) {`,
+    replace: `  if (false) {`,
+    mustKill: ['two Return-Path lines naming different addresses are pointed out'],
+  },
+
+  {
+    id: 'overflow-blamed-on-tool',
+    promise: 'A clipboard too large to read is not reported as a broken tool.',
+    file: 'js/clipboard.js',
+    find: `  if (error?.code !== 'ENOBUFS') return null;`,
+    replace: `  return null;`,
+    mustKill: ['a clipboard too large to read is not blamed on the tool'],
+    // The original, by omission: ENOBUFS fell into the same bucket as ENOENT,
+    // and a 33 MB clipboard printed "no clipboard tool worked" — directing the
+    // reader to install something, for a problem copying less would solve.
+  },
+
+  {
     id: 'ipv4-walked-over-octets',
     promise: 'An IPv4 literal is asked of the filter exactly, not walked like a name.',
     file: 'js/snapshot.js',

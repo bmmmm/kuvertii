@@ -205,6 +205,21 @@ export function skippedNote({ lines, reason }) {
   return ` ${lines} further line${lines === 1 ? '' : 's'} were treated as message body, after ${reason}.`;
 }
 
+/**
+ * What to tell the reader when the input was cut at MAX_HEADER_BYTES.
+ *
+ * Same rule as skippedNote, and it exists because the claim had already split:
+ * the page said "Only the first 1024 KB of what you pasted was read" while the
+ * command clipped in silence and then closed with "N header fields read" — a
+ * complete-sounding tally of an input it had not completely read. Everything
+ * past the cut is invisible, and a sender who opens with a megabyte of padding
+ * chooses what becomes invisible.
+ */
+export function clippedNote(originalLength) {
+  if (originalLength <= MAX_HEADER_BYTES) return '';
+  return ` Only the first ${Math.round(MAX_HEADER_BYTES / 1024)} KB were read — anything after that was not analysed.`;
+}
+
 /** The fields alone, for the callers that have no use for the accounting. */
 export function parseHeaders(text) {
   return readHeaders(text).headers;

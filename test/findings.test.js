@@ -1165,3 +1165,112 @@ test('a signed length that is not a length is not printed as a figure', () => {
   assert.match(row('42').value, /first 42 bytes/);
   assert.match(row('9007199254740991').value, /9,007,199,254,740,991 bytes/);
 });
+
+// ------------------------------------------------------- fields the sender can repeat
+//
+// get() on a repeatable field reads whichever copy sits first, and the header's
+// order is the one part the sender does not fully control: a receiver prepends
+// what it writes. These three fields carried a receiver's authority while
+// nothing checked whether a receiver wrote them.
+
+test('a Received-SPF below a Received is not quoted as the receiver\'s words', () => {
+  // The row's note read "The receiving server's own words, recorded as it made
+  // the decision" — for a field that costs a sender one line to write. RFC
+  // 7208 §9.1 has the receiver prepend it above its own Received, so one
+  // sitting below a Received was written before the delivering hop.
+  const forged = analyse(parseHeaders([
+    'Received: from mail.evil.example (mail.evil.example [203.0.113.9]) by mx.victim.example with ESMTPS; Mon, 17 Aug 2026 10:00:00 +0000',
+    'Received-SPF: pass (mx.victim.example: domain of paypal.com designates 203.0.113.9 as permitted sender)',
+    'From: security@paypal.com',
+    'To: reader@example.org',
+  ].join('\n'))).find((f) => f.id === 'auth');
+
+  const row = forged.items.find((i) => /^Received-SPF/.test(i.label));
+  assert.equal(row.level, 'caution');
+  assert.match(row.note, /below a Received/);
+  assert.doesNotMatch(row.note, /receiving server's own words/);
+
+  // The side that must stay quiet: in its genuine position, above the first
+  // Received, the attribution stands and no caution is raised.
+  const genuine = analyse(parseHeaders([
+    'Received-SPF: pass (mx.victim.example: domain of b.example designates 203.0.113.9 as permitted sender)',
+    'Received: from mail.b.example (mail.b.example [203.0.113.9]) by mx.victim.example with ESMTPS; Mon, 17 Aug 2026 10:00:00 +0000',
+    'From: a@b.example',
+  ].join('\n'))).find((f) => f.id === 'auth');
+
+  const genuineRow = genuine.items.find((i) => /^Received-SPF/.test(i.label));
+  assert.notEqual(genuineRow.level, 'caution');
+  assert.match(genuineRow.note, /receiving server's own words/);
+});
+
+test('a forefront report below a Received is marked as an earlier hop\'s', () => {
+  // A message that never crossed Microsoft, carrying a fabricated
+  // CAT:NONE;SCL:1, rendered "Scored as not spam" with nothing beside it —
+  // Microsoft's authority lent to a sentence the sender wrote. Any header the
+  // sender writes ends up below the first Received, because the receiving
+  // server prepends its own; that is where the mark hangs.
+  const forged = analyse(parseHeaders([
+    'Received: from mail.evil.example by mx.victim.example with ESMTPS; Mon, 17 Aug 2026 10:00:00 +0000',
+    'X-Forefront-Antispam-Report: CIP:203.0.113.9;CTRY:US;CAT:NONE;SCL:1;DIR:INB',
+    'From: a@b.example',
+  ].join('\n')));
+
+  const rows = forged.flatMap((f) => f.items);
+  const mark = rows.find((i) => /not written by the last hop/.test(i.label) && /Forefront/.test(i.value));
+  assert.ok(mark, 'the position is pointed out');
+  assert.equal(mark.level, 'caution');
+
+  // The genuine shape — the real fixture has the report above the first
+  // Received — carries no such row.
+  const genuineRows = msReport().flatMap((f) => f.items);
+  assert.ok(!genuineRows.some((i) => /not written by the last hop/.test(i.label) && /Forefront/.test(i.value)));
+});
+
+test('a second forefront report is named, not silently unreachable', () => {
+  // With two reports the first is the newest — a receiver prepends — so
+  // reading it is right; reading it silently was not. The probe that found
+  // this put CAT:NONE;SCL:1 above Microsoft's real CAT:PHSH;SCL:9 and the
+  // phishing verdict became unreachable without a trace.
+  const rows = analyse(parseHeaders([
+    'X-Forefront-Antispam-Report: CIP:203.0.113.9;CTRY:US;CAT:NONE;SCL:1;DIR:INB',
+    'Received: from a by b with ESMTP; Mon, 17 Aug 2026 10:00:00 +0000',
+    'X-Forefront-Antispam-Report: CIP:198.51.100.7;CTRY:RU;CAT:PHSH;SCL:9;DIR:INB',
+    'From: a@b.example',
+  ].join('\n'))).flatMap((f) => f.items);
+
+  const dup = rows.find((i) => /X-Forefront-Antispam-Report appears 2 times/.test(i.label));
+  assert.ok(dup, 'the second copy is pointed out');
+  assert.equal(dup.level, 'caution');
+  assert.match(dup.value, /first is the newest/);
+
+  // One report — the ordinary case — says nothing about copies.
+  const single = msReport().flatMap((f) => f.items);
+  assert.ok(!single.some((i) => /appears \d+ times/.test(i.label) && /Forefront/.test(i.label)));
+});
+
+test('two Return-Path lines naming different addresses are pointed out', () => {
+  // Return-Path is not a singleton the way From is — each final delivery
+  // prepends one, so two copies can be honest. Two copies naming different
+  // bounce addresses while nothing says so is the reader being shown one
+  // address on a message that carries another.
+  const rows = analyse(parseHeaders([
+    'Return-Path: <bounce@legit.example>',
+    'Return-Path: <collector@evil.example>',
+    'From: a@legit.example',
+    'Received: from a by b with ESMTPS; Mon, 17 Aug 2026 10:00:00 +0000',
+  ].join('\n'))).flatMap((f) => f.items);
+
+  const row = rows.find((i) => /Return-Path appears 2 times/.test(i.label));
+  assert.ok(row, 'the disagreement is reported');
+  assert.equal(row.level, 'caution');
+  assert.match(row.value, /collector@evil\.example/);
+
+  // The honest shapes stay quiet: one copy, and two identical copies from a
+  // message delivered twice.
+  const once = analyse(parseHeaders('Return-Path: <b@x.example>\nFrom: a@x.example\n')).flatMap((f) => f.items);
+  assert.ok(!once.some((i) => /Return-Path appears/.test(i.label)));
+  const twiceSame = analyse(parseHeaders(
+    'Return-Path: <b@x.example>\nReturn-Path: <b@x.example>\nFrom: a@x.example\n',
+  )).flatMap((f) => f.items);
+  assert.ok(!twiceSame.some((i) => /Return-Path appears/.test(i.label)));
+});

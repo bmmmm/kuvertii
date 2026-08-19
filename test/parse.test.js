@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { decodeCandidates, findAddresses, readability } from '../js/decode.js';
-import { get, getAll, parseHeaders, readHeaders, skippedNote } from '../js/unfold.js';
+import { clippedNote, get, getAll, MAX_HEADER_BYTES, parseHeaders, readHeaders, skippedNote } from '../js/unfold.js';
 import {
   BULK_HEADER, CAMPAIGN_SEGMENT, MAILER_SEGMENT, RECIPIENT, UNSUB_TOKEN,
 } from './fixtures.js';
@@ -117,6 +117,18 @@ test('a complete header accounts for everything and says nothing', () => {
   assert.equal(headers.length, 3);
   assert.equal(skipped.lines, 0);
   assert.equal(skippedNote(skipped), '');
+});
+
+test('input cut at the ceiling says so, and an uncut input says nothing', () => {
+  // The page said "Only the first 1024 KB was read" while the command clipped
+  // in silence and closed with "N header fields read. Nothing left this
+  // machine." — a complete-sounding tally of an input it had not completely
+  // read. A sender who opens with a megabyte of padding chooses what falls
+  // past the cut, so the cut has to be announced. One wording, owned here.
+  assert.match(clippedNote(MAX_HEADER_BYTES + 1), /Only the first 1024 KB were read/);
+  assert.match(clippedNote(MAX_HEADER_BYTES + 1), /not analysed/);
+  assert.equal(clippedNote(MAX_HEADER_BYTES), '', 'exactly at the ceiling nothing was lost');
+  assert.equal(clippedNote(120), '');
 });
 
 test('an ordinary message body is not reported as something lost', () => {

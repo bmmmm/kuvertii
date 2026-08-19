@@ -137,6 +137,22 @@ function contradictionFinding(headers) {
     });
   }
 
+  // Return-Path is not in SINGLETON_FIELDS because two copies can be honest:
+  // each final delivery prepends one, so a message forwarded out of a mailbox
+  // carries the old one below the new. What cannot be honest-and-harmless is
+  // two copies naming different addresses while nothing points that out — the
+  // reader is shown one bounce address while the message carries another.
+  const returnPaths = getAll(headers, 'return-path');
+  if (new Set(returnPaths.map((v) => v.trim().toLowerCase())).size > 1) {
+    items.push({
+      label: `Return-Path appears ${returnPaths.length} times, naming different addresses`,
+      value: returnPaths.map((v, i) => `${i + 1}. ${clip(v, 120)}`).join('\n'),
+      mono: true,
+      level: 'caution',
+      note: 'One per delivery is expected, newest first. Everything below the first was written earlier — by a previous delivery, or by whoever sent the message.',
+    });
+  }
+
   // Set by js/unfold.js when a localised label was displaced by the real field.
   for (const header of headers.filter((h) => h.aliasOverruled)) {
     items.push({
@@ -1120,7 +1136,12 @@ const COMPAUTH_CLASSES = table({
 
 function authFinding(headers) {
   const results = getAll(headers, 'authentication-results').join('\n');
-  const receivedSpf = get(headers, 'received-spf');
+  // The field object, not just the value: the row below quotes this as "the
+  // receiving server's own words", and whether that attribution is honest
+  // depends on where the field sits — the same question already asked of
+  // Authentication-Results further down.
+  const receivedSpfField = headers.find((h) => h.name.toLowerCase() === 'received-spf');
+  const receivedSpf = receivedSpfField?.value ?? '';
   // RFC 6376 §4 permits any number of these, and ordinary mail uses the
   // permission: an ESP signs with RSA and ed25519 side by side, and a mailing
   // list adds its own over the top. Reading `get` — the first one — meant the
@@ -1365,10 +1386,19 @@ function authFinding(headers) {
     const [outcome, ...rest] = receivedSpf.split(/\s+/);
     const explanation = rest.join(' ').replace(/^\((.*)\)$/, '$1').trim();
     if (explanation) {
+      // RFC 7208 §9.1 has the receiver prepend this field above the Received
+      // it writes, exactly like Authentication-Results. One sitting below a
+      // Received was added before the delivering hop — and quoting that as
+      // "the receiving server's own words" put this tool's voice behind a
+      // sentence the sender may have written.
+      const below = firstHop !== -1 && headers.indexOf(receivedSpfField) > firstHop;
       items.push({
         label: `Received-SPF: ${outcome.replace(/[^A-Za-z]/g, '')}`,
         value: explanation,
-        note: 'The receiving server\'s own words, recorded as it made the decision.',
+        note: below
+          ? 'This field sits below a Received, so it was added earlier in the chain than the server that delivered the message — ordinary on forwarded mail, and also where a fabricated one would sit. A receiver records its own check above the Received it writes.'
+          : 'The receiving server\'s own words, recorded as it made the decision.',
+        level: below ? 'caution' : undefined,
       });
     }
   }

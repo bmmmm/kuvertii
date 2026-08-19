@@ -5,7 +5,7 @@ import { checkHost } from './blocklist.js';
 import { verdictRows } from './snapshot.js';
 import { neutralise } from './control.js';
 import { analyse } from './findings.js';
-import { MAX_HEADER_BYTES, readHeaders, skippedNote } from './unfold.js';
+import { clippedNote, MAX_HEADER_BYTES, readHeaders, skippedNote } from './unfold.js';
 
 const input = document.querySelector('#header-input');
 const results = document.querySelector('#results');
@@ -98,11 +98,9 @@ function run() {
   // and there is no worker behind it. Clipped rather than refused, because the
   // fields worth reading are at the top of a header and a reader who pasted a
   // whole mailbox is better served by an answer than by a complaint.
-  const overLength = pasted.length > MAX_HEADER_BYTES;
-  const text = overLength ? pasted.slice(0, MAX_HEADER_BYTES) : pasted;
-  const clipped = overLength
-    ? ` Only the first ${Math.round(MAX_HEADER_BYTES / 1024)} KB of what you pasted was read.`
-    : '';
+  const text = pasted.length > MAX_HEADER_BYTES ? pasted.slice(0, MAX_HEADER_BYTES) : pasted;
+  // One wording for both renderers — see clippedNote for how the two drifted.
+  const clipped = clippedNote(pasted.length);
   results.replaceChildren();
 
   if (!text.trim()) {

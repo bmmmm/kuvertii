@@ -112,6 +112,24 @@ test('a file argument wins over anything on stdin', async () => {
   assert.doesNotMatch(stdout, /maja\.beispiel/, 'and stdin was not read as well');
 });
 
+test('input cut at the ceiling is announced, not silently tallied', async () => {
+  // The page said "Only the first 1024 KB was read"; the command clipped in
+  // silence and closed with "3 header fields read. Nothing left this machine."
+  // — with the fields past the cut simply gone from the account. A sender who
+  // opens with a megabyte of padding decides what disappears, so the cut has
+  // to be part of the tally it truncates.
+  const padded = `From: a@b.example\nSubject: probe\nX-Blob: ${'x'.repeat(1024 * 1024)}\nX-After-Cut: gone@example.net\n`;
+  const { code, stdout } = await cli([], padded);
+
+  assert.equal(code, 0);
+  assert.match(stdout, /Only the first 1024 KB were read/);
+  assert.doesNotMatch(stdout, /gone@example\.net/, 'the field past the cut really was not read');
+
+  // The still-must-stay-quiet side: an ordinary header carries no such note.
+  const ordinary = await cli([], BULK_HEADER);
+  assert.doesNotMatch(ordinary.stdout, /Only the first/);
+});
+
 test('a report longer than a pipe buffer arrives whole', async () => {
   // execFile gives the child a pipe, which is the case that used to fail:
   // writes to a pipe are asynchronous, a terminal takes them synchronously,

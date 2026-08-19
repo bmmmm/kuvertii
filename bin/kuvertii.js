@@ -16,7 +16,7 @@ import { clearClipboard, readClipboard } from '../js/clipboard.js';
 import { analyse } from '../js/findings.js';
 import { createKeyReader, isQuit, untilQuit } from '../js/keys.js';
 import { createRenderer } from '../js/terminal.js';
-import { MAX_HEADER_BYTES, readHeaders, skippedNote } from '../js/unfold.js';
+import { clippedNote, MAX_HEADER_BYTES, readHeaders, skippedNote } from '../js/unfold.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DATA = join(HERE, '..', 'data');
@@ -93,22 +93,27 @@ function headerBlock(text) {
   const block = end === -1 ? text : text.slice(0, end);
   // Same ceiling the page applies, for the same reason: a header this long is
   // not one a mail server produced. Clipped rather than refused — the fields
-  // worth reading sit at the top.
-  return block.length > MAX_HEADER_BYTES ? block.slice(0, MAX_HEADER_BYTES) : block;
+  // worth reading sit at the top — but never in silence: the closing tally
+  // reads as a complete account of the input, so it has to say when it is not.
+  return {
+    block: block.length > MAX_HEADER_BYTES ? block.slice(0, MAX_HEADER_BYTES) : block,
+    clipped: clippedNote(block.length),
+  };
 }
 
 // --------------------------------------------------------------------- report
 
 async function report(text, renderer, out = process.stdout) {
-  const { headers, skipped } = readHeaders(headerBlock(text));
+  const { block, clipped } = headerBlock(text);
+  const { headers, skipped } = readHeaders(block);
   if (!headers.length) {
-    out.write(`${renderer.paint('\x1b[33m', 'Nothing here parsed as a header block.')}\n`);
+    out.write(`${renderer.paint('\x1b[33m', `Nothing here parsed as a header block.${clipped}`)}\n`);
     return false;
   }
 
   const findings = analyse(headers);
   if (!findings.length) {
-    out.write(`Parsed ${headers.length} header fields, but found nothing noteworthy.\n`);
+    out.write(`Parsed ${headers.length} header fields, but found nothing noteworthy.${clipped}\n`);
     return true;
   }
 
@@ -121,7 +126,7 @@ async function report(text, renderer, out = process.stdout) {
     out.write(`${renderer.renderFinding(rendered)}\n`);
   }
 
-  out.write(`\n${renderer.paint('\x1b[2m', `${headers.length} header fields read.${skippedNote(skipped)} Nothing left this machine.`)}\n`);
+  out.write(`\n${renderer.paint('\x1b[2m', `${headers.length} header fields read.${skippedNote(skipped)}${clipped} Nothing left this machine.`)}\n`);
   return true;
 }
 

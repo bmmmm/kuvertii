@@ -150,7 +150,14 @@ function unreadableScore(name, raw, range) {
 
 /** Verdict items from the Microsoft 365 anti-spam headers, or [] when absent. */
 export function microsoftVerdicts(headers) {
-  const forefront = parseReport(get(headers, 'x-forefront-antispam-report'));
+  // The field objects, not just the first value: where a report sits and how
+  // many there are carry as much meaning as what it says. Reading `get()`
+  // alone meant a message that never crossed Microsoft, carrying a fabricated
+  // CAT:NONE;SCL:1, rendered "Scored as not spam" with Microsoft's authority —
+  // and when a real report sat below a smuggled one, the real verdict
+  // (CAT:PHSH;SCL:9 in the probe) was not merely unreported but unreachable.
+  const reports = headers.filter((h) => h.name.toLowerCase() === 'x-forefront-antispam-report');
+  const forefront = parseReport(reports[0]?.value ?? '');
   const antispam = parseReport(get(headers, 'x-microsoft-antispam'));
   const items = [];
 
@@ -231,6 +238,31 @@ export function microsoftVerdicts(headers) {
       label: 'Connecting country',
       value: forefront.CTRY,
       note: 'Where the sending server was, by IP. Not where the sender is, and trivially changed by relaying.',
+    });
+  }
+
+  // Where the report sat, said once, under the rows that rest on it — the same
+  // treatment Authentication-Results already gets, because the two fields are
+  // written by the same filter and forged by the same hand. In the real M365
+  // fixture the report sits above the first Received; one sitting below a
+  // Received was added before the delivering hop, which is ordinary on mail
+  // forwarded out of a Microsoft mailbox and is also the only place a
+  // fabricated report can sit.
+  const firstHop = headers.findIndex((h) => h.name.toLowerCase() === 'received');
+  if (reports.length && firstHop !== -1 && headers.indexOf(reports[0]) > firstHop) {
+    items.push({
+      label: 'This filter report was not written by the last hop',
+      value: 'The X-Forefront-Antispam-Report sits below a Received, so it was added earlier in the chain than the server that delivered this message. That is ordinary on mail forwarded out of a Microsoft mailbox — and it is also where a fabricated report would sit, because the sender writes everything below their own hop.',
+      note: 'Read these rows as worth whatever the hop that wrote them is worth.',
+      level: 'caution',
+    });
+  }
+
+  if (reports.length > 1) {
+    items.push({
+      label: `X-Forefront-Antispam-Report appears ${reports.length} times`,
+      value: 'Only the first was read. A receiver prepends its report above what is already there, so the first is the newest — the rows above describe that copy alone, and anything the copies below say differently is not shown here.',
+      level: 'caution',
     });
   }
 
