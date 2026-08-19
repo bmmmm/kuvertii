@@ -472,6 +472,57 @@ function el(tag, className, text) {
     // allowlist, so a new source fails until somebody writes down why it belongs.
   },
 
+  // ------------------------------------------------------ round three
+  //
+  // All three are the same shape as round two's: a rule that was right about
+  // the example it was written from, and silent about the rest of the range
+  // that example came from.
+
+  {
+    id: 'date-separator-ignores-comments',
+    promise: 'A semicolon a sender puts in a comment is not the date separator.',
+    file: 'js/findings.js',
+    find: `  return depth === 0 ? index : text.lastIndexOf(';');`,
+    replace: `  return text.lastIndexOf(';');`,
+    mustKill: [
+      'a semicolon inside a comment is not mistaken for the date separator',
+      'a comment in the route cannot suppress an expired signature',
+    ],
+    // The replacement is the code as it stood: `unbalanced-comment-eats-the-clause`
+    // closed this defect at `withoutComments` and left the same erasure
+    // reachable one function earlier, through the split that feeds it.
+  },
+
+  {
+    id: 'dkim-reads-one-signature',
+    promise: 'Every DKIM signature is described, not just the first.',
+    file: 'js/findings.js',
+    find: `  const dkimSignatures = getAll(headers, 'dkim-signature');`,
+    replace: `  const dkimSignatures = getAll(headers, 'dkim-signature').slice(0, 1);`,
+    mustKill: ['a second DKIM signature is described, not hidden behind the first'],
+  },
+
+  {
+    id: 'signature-rows-unbounded',
+    promise: 'The sender cannot decide how many rows the authentication card has.',
+    file: 'js/findings.js',
+    find: `  for (const rows of ordered.slice(0, DESCRIBED_AT_MOST)) items.push(...rows);`,
+    replace: `  for (const rows of ordered) items.push(...rows);`,
+    mustKill: ['a flood of DKIM signatures is bounded, and the warnings survive it'],
+    // This one was introduced by the fix directly above it. Reading every
+    // signature was right; leaving the count to the sender while doing it was
+    // the same defect the fix had just closed, one field further out.
+  },
+
+  {
+    id: 'address-literal-ipv4-only',
+    promise: 'A link to a bare address is named whichever family the address is from.',
+    file: 'js/links.js',
+    find: `  return IPV4_RE.test(hostname) || hostname.startsWith('[');`,
+    replace: `  return IPV4_RE.test(hostname);`,
+    mustKill: ['a bare IPv6 address is named as a bare address'],
+  },
+
   {
     id: 'serve-public-bind',
     promise: 'The dev server listens on loopback only.',

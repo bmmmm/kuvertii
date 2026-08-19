@@ -1057,7 +1057,7 @@ function formatUtc(at) {
  */
 function receivedDates(headers) {
   return getAll(headers, 'received')
-    .map((value) => new Date(value.slice(value.lastIndexOf(';') + 1).trim()))
+    .map((value) => new Date(value.slice(dateSeparator(value) + 1).trim()))
     .filter((date) => !Number.isNaN(date.getTime()));
 }
 
@@ -1121,7 +1121,16 @@ const COMPAUTH_CLASSES = table({
 function authFinding(headers) {
   const results = getAll(headers, 'authentication-results').join('\n');
   const receivedSpf = get(headers, 'received-spf');
-  const dkimSignature = get(headers, 'dkim-signature');
+  // RFC 6376 §4 permits any number of these, and ordinary mail uses the
+  // permission: an ESP signs with RSA and ed25519 side by side, and a mailing
+  // list adds its own over the top. Reading `get` — the first one — meant the
+  // rest were not merely unreported but unreachable, so a sender could put a
+  // clean signature above a weak one and the card would describe the clean one.
+  // The same class as the singleton fields in `contradictionFinding`, arriving
+  // from the opposite direction: there a field that may appear once appeared
+  // twice; here a field that may appear many times was read once.
+  const dkimSignatures = getAll(headers, 'dkim-signature');
+  const dkimSignature = dkimSignatures[0] ?? '';
   const dkim2 = get(headers, 'dkim2-signature') || get(headers, 'message-instance');
   // Without this, a message signed only under the DKIM2 draft produces no
   // authentication card at all — the reader is told nothing rather than told
@@ -1318,67 +1327,159 @@ function authFinding(headers) {
     }
   }
 
-  const signingDomain = dkimSignature.match(/\bd=([^;\s]+)/)?.[1];
-  if (signingDomain) {
-    items.push({
-      label: 'Signed by domain',
-      value: signingDomain,
-      note: 'The signature proves this domain sent it — it says nothing about whether the domain is trustworthy.',
-    });
-  }
+  // Every signature is described, and each row says which one it is describing.
+  // Naming the signature matters most exactly where it is least convenient: a
+  // weak signature beside a strong one is the case where an unlabelled warning
+  // reads as though it applied to both.
+  // Only when the domains actually differ. Two signatures from one sender —
+  // the RSA-and-ed25519 pair an ESP publishes so that receivers without the
+  // newer algorithm can still verify — are distinguished by nothing the suffix
+  // would say, and appending the same domain to every row states a difference
+  // that is not there.
+  const signingDomains = new Set(
+    dkimSignatures.map((s) => s.match(/\bd=([^;\s]+)/)?.[1]).filter(Boolean),
+  );
+  const forSignature = (label, domain) => (signingDomains.size > 1 && domain ? `${label} — ${domain}` : label);
+  // Rows are collected per signature rather than pushed as they are found,
+  // because the number of signatures is written by the sender. Reading only the
+  // first one held that number at one by accident; reading all of them removed
+  // the bound altogether, and 500 fabricated DKIM-Signature fields produced
+  // 1,500 rows with every real warning buried somewhere inside them. Making a
+  // card unreadable is a way of making it say nothing.
+  //
+  // So the bound is by content, not by position — the same rule
+  // `recipientFinding` applies to a message addressed to a crowd. A signature
+  // that produced a warning is always described, because prepending harmless
+  // signatures until the warning falls off the end is precisely the attack.
+  const perSignature = [];
+  const seenRows = new Set();
+  const collect = (rows, row) => {
+    const key = `${row.label}\u0000${row.value}`;
+    if (seenRows.has(key)) return;
+    seenRows.add(key);
+    rows.push(row);
+  };
 
-  const timestamp = dkimSignature.match(/\bt=(\d{9,})/)?.[1];
-  if (timestamp) {
-    const signedAt = signatureTime(timestamp);
-    items.push(signedAt
-      ? { label: 'Signed at', value: formatUtc(signedAt) }
-      : {
-        label: 'The signature claims a time that is not a time',
-        value: `t=${timestamp}`,
-        level: 'caution',
-        note: 'Seconds since 1970, and this many of them lands outside any date that can be expressed. A verifier reading it has nothing to compare against, so whatever the signature was meant to bound, it does not.',
+  // Walking every Received to find the newest hop is only worth doing when a
+  // signature carries an expiry to compare against, and hoisting it out of the
+  // loop made it unconditional. Deferred rather than guarded by a second copy
+  // of the `x=` pattern, because two patterns that must agree are two patterns
+  // that can stop agreeing.
+  let arrival;
+  const arrivedAt = () => {
+    if (arrival === undefined) arrival = receivedDates(headers)[0] ?? null;
+    return arrival;
+  };
+
+  for (const signature of dkimSignatures) {
+    const rows = [];
+    const domain = signature.match(/\bd=([^;\s]+)/)?.[1];
+    if (domain) {
+      collect(rows, {
+        label: 'Signed by domain',
+        value: domain,
+        note: 'The signature proves this domain sent it — it says nothing about whether the domain is trustworthy.',
       });
+    }
+
+    const timestamp = signature.match(/\bt=(\d{9,})/)?.[1];
+    if (timestamp) {
+      const signedAt = signatureTime(timestamp);
+      collect(rows, signedAt
+        ? { label: forSignature('Signed at', domain), value: formatUtc(signedAt) }
+        : {
+          label: forSignature('The signature claims a time that is not a time', domain),
+          value: `t=${timestamp}`,
+          level: 'caution',
+          note: 'Seconds since 1970, and this many of them lands outside any date that can be expressed. A verifier reading it has nothing to compare against, so whatever the signature was meant to bound, it does not.',
+        });
+    }
+
+    // A length tag signs only the first l= bytes of the body. Everything after
+    // that can be appended by anyone without breaking the signature, so "DKIM
+    // passed" stops meaning "the message is intact". Rare in ordinary mail and
+    // worth naming when it appears, but reported as a property of the signature
+    // rather than as an accusation — some legitimate mailing lists set it.
+    const signedLength = signature.match(/\bl=(\d+)/)?.[1];
+    if (signedLength) {
+      collect(rows, {
+        label: forSignature('Only part of the message is signed', domain),
+        value: `The signature covers the first ${Number(signedLength).toLocaleString('en')} bytes of the body.`,
+        note: 'Anything after that can be added without invalidating it, so a passing DKIM result does not vouch for the whole message.',
+        level: 'caution',
+      });
+    }
+
+    // An expiry is the industry's main answer to DKIM replay — a spammer taking
+    // one correctly signed message and re-sending it to thousands of other
+    // recipients, where the signature keeps verifying because it covers nothing
+    // about who it was sent to.
+    const expiry = signature.match(/\bx=(\d{9,})/)?.[1];
+    if (expiry) {
+      const expiresAt = signatureTime(expiry);
+      const newestHop = arrivedAt();
+      const stale = expiresAt && newestHop && expiresAt < newestHop;
+      collect(rows, expiresAt
+        ? {
+          label: forSignature(stale ? 'The signature had expired before this message arrived' : 'The signature carries an expiry', domain),
+          value: `Valid until ${formatUtc(expiresAt)}.`,
+          note: stale
+            ? 'An expired signature verifies as no signature at all, so whatever DKIM appeared to vouch for here, it no longer does.'
+            : 'A short window limits how long a correctly signed copy can be replayed to other recipients.',
+          level: stale ? 'caution' : null,
+        }
+        : {
+          label: forSignature('The expiry is not a time', domain),
+          value: `x=${expiry}`,
+          level: 'caution',
+          note: 'An expiry outside any expressible date bounds nothing. Read it as a signature without an expiry, not as one with a distant deadline — and note that a comparison against it silently answers "not yet expired" whichever way it is asked.',
+        });
+    }
+
+    const algorithm = signature.match(/\ba=([\w-]+)/)?.[1]?.toLowerCase();
+    if (algorithm && /sha1$/.test(algorithm)) {
+      collect(rows, {
+        label: forSignature(`Signed with ${algorithm}`, domain),
+        value: 'SHA-1 has been prohibited for DKIM since RFC 8301 in 2018, because collisions are practical.',
+        note: 'Most receivers now treat such a signature as no signature at all.',
+        level: 'caution',
+      });
+    } else if (algorithm === 'ed25519-sha256') {
+      // Without this the `a=` branch only ever speaks to accuse, and a sender who
+      // did the modern thing gets the same silence as one who did nothing.
+      collect(rows, {
+        label: forSignature('Signed with ed25519-sha256', domain),
+        value: 'The elliptic-curve signature type from RFC 8463. Shorter keys than RSA at the same strength, which is why it fits in DNS without splitting the record.',
+        note: 'Still uncommon; senders usually publish an RSA signature beside it for receivers that do not implement it.',
+      });
+    }
+  
+    if (rows.length) perSignature.push(rows);
   }
 
-  // A length tag signs only the first l= bytes of the body. Everything after
-  // that can be appended by anyone without breaking the signature, so "DKIM
-  // passed" stops meaning "the message is intact". Rare in ordinary mail and
-  // worth naming when it appears, but reported as a property of the signature
-  // rather than as an accusation — some legitimate mailing lists set it.
-  const signedLength = dkimSignature.match(/\bl=(\d+)/)?.[1];
-  if (signedLength) {
+
+  // A ceiling, not a filter. Ordering by what a signature says puts the
+  // warnings first, but ordering alone bounds nothing: an attacker who wants
+  // 500 rows writes `l=1` on all 500 and every one of them then "says
+  // something". The count itself has to be capped, and what falls outside the
+  // cap has to be reported as a quantity rather than dropped.
+  //
+  // Six is past anything honest — an ESP's RSA-and-ed25519 pair, a mailing list
+  // signing over the top, and room to spare. Beyond it the number is the
+  // finding: nobody signs a message fifty times except to bury something.
+  const DESCRIBED_AT_MOST = 6;
+  const speaks = (rows) => rows.some((row) => row.level);
+  const ordered = [...perSignature.filter(speaks), ...perSignature.filter((rows) => !speaks(rows))];
+  for (const rows of ordered.slice(0, DESCRIBED_AT_MOST)) items.push(...rows);
+
+  const undescribed = dkimSignatures.length - Math.min(ordered.length, DESCRIBED_AT_MOST);
+  if (undescribed > 0) {
     items.push({
-      label: 'Only part of the message is signed',
-      value: `The signature covers the first ${Number(signedLength).toLocaleString('en')} bytes of the body.`,
-      note: 'Anything after that can be added without invalidating it, so a passing DKIM result does not vouch for the whole message.',
+      label: `This message carries ${dkimSignatures.length} DKIM signatures`,
+      value: `${undescribed} of them are not described above. The ones that say something about the message were kept; a header this size is not a message that has been signed carefully.`,
+      note: 'One signature is normal and three happens. Past that, the count is the finding — signatures are cheap to write, and a long enough list pushes everything else off the end of whatever reads it.',
       level: 'caution',
     });
-  }
-
-  // An expiry is the industry's main answer to DKIM replay — a spammer taking
-  // one correctly signed message and re-sending it to thousands of other
-  // recipients, where the signature keeps verifying because it covers nothing
-  // about who it was sent to.
-  const expiry = dkimSignature.match(/\bx=(\d{9,})/)?.[1];
-  if (expiry) {
-    const expiresAt = signatureTime(expiry);
-    const newestHop = receivedDates(headers)[0];
-    const stale = expiresAt && newestHop && expiresAt < newestHop;
-    items.push(expiresAt
-      ? {
-        label: stale ? 'The signature had expired before this message arrived' : 'The signature carries an expiry',
-        value: `Valid until ${formatUtc(expiresAt)}.`,
-        note: stale
-          ? 'An expired signature verifies as no signature at all, so whatever DKIM appeared to vouch for here, it no longer does.'
-          : 'A short window limits how long a correctly signed copy can be replayed to other recipients.',
-        level: stale ? 'caution' : null,
-      }
-      : {
-        label: 'The expiry is not a time',
-        value: `x=${expiry}`,
-        level: 'caution',
-        note: 'An expiry outside any expressible date bounds nothing. Read it as a signature without an expiry, not as one with a distant deadline — and note that a comparison against it silently answers "not yet expired" whichever way it is asked.',
-      });
   }
 
   if (dkim2) {
@@ -1386,24 +1487,6 @@ function authFinding(headers) {
       label: 'Signed under the DKIM2 draft',
       value: 'This message carries DKIM2-Signature or Message-Instance fields, which record each modification a forwarder made rather than breaking when one is made.',
       note: 'draft-ietf-dkim-dkim2-spec, an active Internet-Draft with no published RFC. Nothing here verifies it, and few receivers evaluate it yet.',
-    });
-  }
-
-  const algorithm = dkimSignature.match(/\ba=([\w-]+)/)?.[1]?.toLowerCase();
-  if (algorithm && /sha1$/.test(algorithm)) {
-    items.push({
-      label: `Signed with ${algorithm}`,
-      value: 'SHA-1 has been prohibited for DKIM since RFC 8301 in 2018, because collisions are practical.',
-      note: 'Most receivers now treat such a signature as no signature at all.',
-      level: 'caution',
-    });
-  } else if (algorithm === 'ed25519-sha256') {
-    // Without this the `a=` branch only ever speaks to accuse, and a sender who
-    // did the modern thing gets the same silence as one who did nothing.
-    items.push({
-      label: 'Signed with ed25519-sha256',
-      value: 'The elliptic-curve signature type from RFC 8463. Shorter keys than RSA at the same strength, which is why it fits in DNS without splitting the record.',
-      note: 'Still uncommon; senders usually publish an RSA signature beside it for receivers that do not implement it.',
     });
   }
 
@@ -1611,7 +1694,7 @@ function commentsOnly(text) {
 const TLS_TOKEN = /\bTLS[v._\d]*/i;
 
 function parseReceived(value) {
-  const [head, tail] = splitOnce(value, ';');
+  const [head, tail] = splitOnce(value);
   const clause = withoutComments(head);
   return {
     from: clause.match(/\bfrom\s+([^\s;()]+)/i)?.[1] ?? null,
@@ -1627,8 +1710,43 @@ function parseReceived(value) {
   };
 }
 
-function splitOnce(text, separator) {
-  const index = text.lastIndexOf(separator);
+/**
+ * Where the route tokens end and the date begins.
+ *
+ * RFC 5322 §3.6.7 puts exactly one `;` there, and everything to its left may
+ * carry comments — which hold semicolons of their own. `lastIndexOf` answers
+ * with whichever one sits furthest right, so a comment written *after* the date
+ * (`… ; Mon, 17 Aug 2026 10:00:00 +0000 (envelope-from <a@b>; helo=c)`) made
+ * the tail `helo=c)` and the route card printed that as the hop's timestamp.
+ *
+ * Worse when the clause has no date at all: the split then lands inside the
+ * comment, `withoutComments` is handed an unbalanced fragment and returns it
+ * whole, and `by` and `with` end up on the far side of the separator. One
+ * semicolon inside one comment — both written by the sender — erased the
+ * receiving server and the encryption verdict from the card. That is the
+ * defect `unbalanced-comment-eats-the-clause` closed, arriving by the one
+ * route that fix did not cover, because it was written against the example it
+ * was reported with.
+ *
+ * Depth-counted for the same reason `withoutComments` is, and it defers to
+ * that function's rule at the end: what never closes is not a comment, so an
+ * unbalanced clause is read exactly as written.
+ */
+function dateSeparator(text) {
+  let depth = 0;
+  let index = -1;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '\\') { i += 1; continue; } // quoted-pair: skip what it escapes
+    if (ch === '(') { depth += 1; continue; }
+    if (ch === ')') { depth = Math.max(0, depth - 1); continue; }
+    if (ch === ';' && depth === 0) index = i;
+  }
+  return depth === 0 ? index : text.lastIndexOf(';');
+}
+
+function splitOnce(text) {
+  const index = dateSeparator(text);
   return index === -1 ? [text, null] : [text.slice(0, index), text.slice(index + 1)];
 }
 

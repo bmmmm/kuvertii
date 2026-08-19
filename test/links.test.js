@@ -149,3 +149,27 @@ test('an unsubscribe on a different com.sg registrant is not "the sender domain"
   assert.match(titles, /unrelated domain/);
   assert.ok(!result.signals.some((s) => s.level === 'good' && /sender domain/.test(s.title)));
 });
+
+test('a bare IPv6 address is named as a bare address', () => {
+  // `URL` normalises every IPv4 spelling a phisher reaches for — decimal,
+  // hex-dotted, octal — into a dotted quad, so one pattern answered for that
+  // whole family and looked complete. It said nothing about the other family:
+  // an IPv6 literal arrives bracketed, matched nothing, and the link was rated
+  // `plausible` on the strength of its path.
+  const six = inspectUnsubscribeLink('http://[2001:db8::1]/unsubscribe');
+  assert.ok(signal(six, 'Bare IP address'), 'the address is named');
+  assert.equal(six.verdict, 'suspicious');
+
+  // Unchanged for the family that already worked, in each spelling.
+  for (const url of ['http://203.0.113.5/unsubscribe', 'http://3405803781/unsubscribe']) {
+    assert.ok(signal(inspectUnsubscribeLink(url), 'Bare IP address'), url);
+  }
+
+  // And behind a redirect: the tracking link is a name, the destination is not.
+  const encoded = Buffer.from('http://203.0.113.5/verify').toString('base64').replace(/=+$/, '');
+  const behind = inspectUnsubscribeLink(`https://click.example.com/V${encoded}/x`);
+  assert.ok(signal(behind, 'Bare IP address'), 'the destination is checked too');
+
+  // A named host stays unaccused.
+  assert.equal(signal(inspectUnsubscribeLink('https://example.com/unsubscribe'), 'Bare IP address'), undefined);
+});

@@ -919,3 +919,124 @@ test('an unbalanced parenthesis does not erase the receiving server', () => {
   assert.match(finding.items[0].value, /mx\.bank\.example/, 'the receiving server survives');
   assert.match(finding.items[0].value, /ESMTPS/, 'and so does the protocol');
 });
+
+test('a semicolon inside a comment is not mistaken for the date separator', () => {
+  // RFC 5322 puts exactly one `;` between the route tokens and the date, and
+  // everything left of it may carry comments holding semicolons of their own.
+  // `lastIndexOf` answered with whichever sat furthest right: a comment written
+  // after the date — the shape Postfix and Exim both emit — moved the split
+  // past it, and the route card printed the tail of that comment as the hop's
+  // timestamp.
+  const dated = analyse(parseHeaders([
+    'From: a@b.example',
+    'Received: from mail.example.com by mx.bank.example with ESMTPS;'
+    + ' Mon, 17 Aug 2026 10:00:00 +0000 (envelope-from <c@d.example>; helo=mail.example.com)',
+  ].join('\n'))).find((f) => f.id === 'route');
+
+  assert.match(dated.items[0].chips.join(' '), /Mon, 17 Aug 2026 10:00:00/, 'the date is the date');
+
+  // And the harm the same defect does with no date present at all: the split
+  // lands inside the comment, `withoutComments` is handed an unbalanced
+  // fragment, and `by` and `with` end up on the far side of the separator —
+  // the receiving server and the encryption verdict gone from the card again,
+  // by the one route the unbalanced-parenthesis fix did not cover.
+  const undated = analyse(parseHeaders([
+    'From: a@b.example',
+    'Received: from evil.example (a;b) by mx.bank.example with ESMTPS',
+  ].join('\n'))).find((f) => f.id === 'route');
+
+  assert.match(undated.items[0].value, /mx\.bank\.example/, 'the receiving server survives');
+  assert.match(undated.items[0].value, /ESMTPS/, 'and so does the protocol');
+  assert.match(undated.items[0].chips.join(' '), /encrypted hop/, 'and the encryption verdict is reached');
+});
+
+test('a comment in the route cannot suppress an expired signature', () => {
+  // `receivedDates` split on the same naive `lastIndexOf`, so the same stray
+  // semicolon left the newest hop unparseable — and with nothing to compare
+  // against, "had expired before this message arrived" quietly became "carries
+  // an expiry". A sender-written parenthesis removing a security warning.
+  const withComment = analyse(parseHeaders([
+    'From: a@b.example',
+    'DKIM-Signature: v=1; a=rsa-sha256; d=b.example; x=1700000000; b=AAAA',
+    'Received: from mail.example.com by mx.bank.example with ESMTPS;'
+    + ' Mon, 17 Aug 2026 10:00:00 +0000 (envelope-from <c@d.example>; helo=mail.example.com)',
+  ].join('\n'))).find((f) => f.id === 'auth');
+
+  const expiry = withComment.items.find((i) => /expir/i.test(i.label));
+  assert.match(expiry.label, /had expired before this message arrived/);
+  assert.equal(expiry.level, 'caution');
+});
+
+test('a second DKIM signature is described, not hidden behind the first', () => {
+  // RFC 6376 §4 permits any number of signatures and ordinary mail uses the
+  // permission. Reading only the first meant a sender could put a clean
+  // signature above a weak one: `l=`, `x=` and `a=rsa-sha1` on the second went
+  // unreported, and the card named the wrong signing domain while doing it.
+  const finding = analyse(parseHeaders([
+    'From: a@b.example',
+    'DKIM-Signature: v=1; a=rsa-sha256; d=harmless.example; b=AAAA',
+    'DKIM-Signature: v=1; a=rsa-sha1; d=real-sender.example; l=42; b=BBBB',
+  ].join('\n'))).find((f) => f.id === 'auth');
+
+  const shown = text(finding);
+  assert.match(shown, /harmless\.example/, 'the first signature is still described');
+  assert.match(shown, /real-sender\.example/, 'and so is the second');
+  assert.match(shown, /rsa-sha1/, 'the prohibited algorithm is named');
+  assert.match(shown, /first 42 bytes/, 'and so is the partial signing');
+
+  // Each warning says which signature it is about, because a weak signature
+  // beside a strong one is exactly where an unlabelled row reads as both.
+  const sha1 = finding.items.find((i) => /rsa-sha1/.test(i.label));
+  assert.match(sha1.label, /real-sender\.example/);
+
+  // But only where that distinction exists. The RSA-and-ed25519 pair one sender
+  // publishes so older receivers can still verify shares a domain, and stamping
+  // it onto every row would assert a difference that is not there.
+  const onePair = analyse(parseHeaders([
+    'From: a@b.example',
+    'DKIM-Signature: v=1; a=rsa-sha256; d=b.example; t=1755000000; b=AAAA',
+    'DKIM-Signature: v=1; a=ed25519-sha256; d=b.example; t=1755000000; b=BBBB',
+  ].join('\n'))).find((f) => f.id === 'auth');
+  assert.ok(
+    onePair.items.every((i) => !/ — /.test(i.label)),
+    'one sender, two algorithms: nothing to disambiguate',
+  );
+});
+
+test('a flood of DKIM signatures is bounded, and the warnings survive it', () => {
+  // Reading only the first signature held the row count at one by accident.
+  // Reading all of them removed the bound, and the number of signatures is
+  // written by the sender: 500 fabricated fields produced 1,500 rows. Ordering
+  // the warnings first does not fix that on its own — `l=1` on all 500 makes
+  // every one of them "say something" — so the count itself is capped.
+  const harmless = Array.from({ length: 50 }, (_, i) =>
+    `DKIM-Signature: v=1; a=rsa-sha256; d=s${i}.example; b=X`);
+  const finding = analyse(parseHeaders([
+    'From: a@b.example',
+    ...harmless,
+    'DKIM-Signature: v=1; a=rsa-sha1; d=real-sender.example; l=42; b=Y',
+  ].join('\n'))).find((f) => f.id === 'auth');
+
+  assert.ok(finding.items.length < 20, `bounded, got ${finding.items.length} rows`);
+
+  // Prepending harmless signatures until the warning falls off the end is the
+  // attack, so the ones that say something are described whatever their position.
+  const shown = text(finding);
+  assert.match(shown, /rsa-sha1/, 'the 51st signature is still described');
+  assert.match(shown, /first 42 bytes/);
+
+  // And the quantity is reported rather than silently dropped — a report that
+  // shows six of fifty-one without saying so is the narrower answer this whole
+  // project is written against.
+  const counted = finding.items.find((i) => /51 DKIM signatures/.test(i.label));
+  assert.ok(counted, 'the count is stated');
+  assert.equal(counted.level, 'caution');
+
+  // Nothing changes for a message signed the ordinary number of times.
+  const ordinary = analyse(parseHeaders([
+    'From: a@b.example',
+    'DKIM-Signature: v=1; a=rsa-sha256; d=b.example; b=AAAA',
+    'DKIM-Signature: v=1; a=ed25519-sha256; d=b.example; b=BBBB',
+  ].join('\n'))).find((f) => f.id === 'auth');
+  assert.equal(ordinary.items.filter((i) => /DKIM signatures/.test(i.label)).length, 0);
+});

@@ -34,6 +34,21 @@ import { identifySender, KIND_LABELS } from './senders.js';
 
 const IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 
+/**
+ * Is this hostname a literal address rather than a name?
+ *
+ * `URL` normalises every IPv4 spelling a phisher might reach for — decimal
+ * (`http://3405803781/`), hex-dotted, octal — into dotted quads before this
+ * sees them, so IPV4_RE alone answers for that whole family. It does not
+ * answer for the other family: an IPv6 literal arrives as `[2001:db8::1]`,
+ * matched nothing, and a link to a bare address was rated `plausible` on the
+ * strength of its path. The brackets are what make it unambiguous — a
+ * registrable domain can never contain them.
+ */
+function isAddressLiteral(hostname) {
+  return IPV4_RE.test(hostname) || hostname.startsWith('[');
+}
+
 // Paths a genuine unsubscribe endpoint tends to use.
 const UNSUB_PATH_RE = /(unsub|unsubscribe|optout|opt-out|remove|preferences|subscription|abmeld)/i;
 // Paths that have no business being behind an unsubscribe link.
@@ -221,7 +236,7 @@ export function inspectUnsubscribeLink(url, context = {}) {
     });
   }
 
-  if (IPV4_RE.test(parsed.hostname)) {
+  if (isAddressLiteral(parsed.hostname) || (destParsed && isAddressLiteral(destParsed.hostname))) {
     signals.push({
       level: 'bad',
       title: 'Bare IP address instead of a hostname',
