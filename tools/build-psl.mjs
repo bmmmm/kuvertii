@@ -49,6 +49,39 @@ const SECTIONS = [
   ['===BEGIN PRIVATE DOMAINS===', '===END PRIVATE DOMAINS==='],
 ];
 
+// What one rule may look like: dot-separated labels of letters, digits and
+// combining marks, with hyphens inside a label. Combining marks are not
+// decoration — six real rules (Thai and Balinese) carry them, and a pattern
+// without \p{M} refused all six when measured against the shipped list.
+//
+// The blocklist builder has always had a shape check (HOSTNAME_RE); this
+// builder had none, and here the stakes are higher: every accepted line is
+// interpolated into a template literal inside a committed, browser-executed
+// source module. A line carrying a backtick or ${ would not be a bad entry in
+// a data file — it would be code in js/psl.js.
+const LABEL = '[\\p{L}\\p{M}\\p{N}](?:[\\p{L}\\p{M}\\p{N}-]*[\\p{L}\\p{M}\\p{N}])?';
+export const RULE_RE = new RegExp(`^${LABEL}(?:\\.${LABEL})*$`, 'u');
+
+/**
+ * The bare name a rule speaks for, refusing anything that is not a rule.
+ *
+ * Refusal throws rather than skips, deliberately differing from the blocklist
+ * builder: a dropped feed line loses one warning, while a dropped suffix rule
+ * silently moves a party boundary — the error that renders a phishing link
+ * green. If the list legitimately grows a new character class some day, the
+ * build fails loudly and widening this pattern is a commit somebody writes a
+ * reason for.
+ */
+export function ruleName(rule) {
+  const name = rule.startsWith('!') ? rule.slice(1)
+    : rule.startsWith('*.') ? rule.slice(2)
+      : rule;
+  if (!RULE_RE.test(name)) {
+    throw new Error(`"${rule}" is not a public-suffix rule — the list format has changed, or the content is not what it claims to be`);
+  }
+  return name;
+}
+
 /** Every section's rules, comments and blank lines removed. */
 function publishedRules(body) {
   const lines = body.split('\n');
@@ -89,14 +122,15 @@ async function main() {
   const exceptions = [];
 
   for (const rule of rules) {
+    const name = ruleName(rule);
     if (rule.startsWith('!')) {
-      exceptions.push(rule.slice(1));
+      exceptions.push(name);
     } else if (rule.startsWith('*.')) {
       // Stored as the parent the wildcard hangs off, because that is what the
       // lookup has in hand: testing `bar.ck` means asking about `ck`.
-      wildcards.push(rule.slice(2));
-    } else if (rule.includes('.')) {
-      exact.push(rule);
+      wildcards.push(name);
+    } else if (name.includes('.')) {
+      exact.push(name);
     }
     // Single-label rules fall through — see the note at the top.
   }
@@ -136,7 +170,12 @@ ${set('EXCEPTION', exceptions)}
   );
 }
 
-main().catch((error) => {
-  process.stderr.write(`build-psl failed: ${error.message}\n`);
-  process.exit(1);
-});
+// Only when run directly — the same guard build-blocklist.mjs carries, and it
+// was missing here: importing this module for RULE_RE in a test would have
+// started a build, network fetch included.
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main().catch((error) => {
+    process.stderr.write(`build-psl failed: ${error.message}\n`);
+    process.exit(1);
+  });
+}

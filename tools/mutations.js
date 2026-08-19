@@ -684,6 +684,19 @@ function el(tag, className, text) {
   },
 
   {
+    id: 'psl-line-becomes-code',
+    promise: 'No upstream line reaches the generated module without matching the shape of a rule.',
+    file: 'tools/build-psl.mjs',
+    find: `  if (!RULE_RE.test(name)) {`,
+    replace: `  if (false) {`,
+    mustKill: ['a line that is not a rule stops the build instead of becoming code'],
+    // The original, by omission: every non-comment line was interpolated into
+    // a template literal inside committed, browser-executed js/psl.js. A line
+    // carrying a backtick or ${ would not have been a bad entry — it would
+    // have been code.
+  },
+
+  {
     id: 'overflow-blamed-on-tool',
     promise: 'A clipboard too large to read is not reported as a broken tool.',
     file: 'js/clipboard.js',

@@ -49,3 +49,46 @@ test('the guard does not exempt a subdomain of a protected name', () => {
   // listing it tars only itself, which is the intended granularity.
   assert.ok(!wouldSmear('compromised.pages.dev'));
 });
+
+// The same question asked of the other builder: what may enter the generated
+// module? Here the stakes are higher than a bad list entry. Every accepted
+// line is interpolated into a template literal inside js/psl.js — a committed,
+// browser-executed source file — so a line carrying a backtick or ${ would not
+// be data, it would be code shipped to every visitor.
+
+test('every shipped suffix rule is one the builder would accept', async () => {
+  // Couples the shape check to reality: measured before the pattern existed,
+  // a version without \p{M} refused six real rules (Thai and Balinese carry
+  // combining marks). If either the pattern or the list drifts, this goes red
+  // on the shipped bytes rather than on somebody's assumption.
+  const { ruleName } = await import('../tools/build-psl.mjs');
+  const { EXACT, WILDCARD, EXCEPTION } = await import('../js/psl.js');
+  for (const set of [EXACT, WILDCARD, EXCEPTION]) {
+    for (const rule of set) assert.equal(ruleName(rule), rule);
+  }
+});
+
+test('a line that is not a rule stops the build instead of becoming code', async () => {
+  const { ruleName } = await import('../tools/build-psl.mjs');
+  for (const evil of [
+    '${process.env.HOME}.evil',
+    'back`tick.example',
+    'back\\slash.example',
+    'sp ace.example',
+    '\u0007bel.example',
+    'evil.example\n});import("x',
+    '-leading-hyphen.example',
+    'trailing-.example',
+    '',
+  ]) {
+    assert.throws(() => ruleName(evil), /not a public-suffix rule/, JSON.stringify(evil));
+  }
+});
+
+test('rule prefixes name the part the lookup asks about', async () => {
+  const { ruleName } = await import('../tools/build-psl.mjs');
+  assert.equal(ruleName('!www.ck'), 'www.ck');
+  assert.equal(ruleName('*.ck'), 'ck');
+  assert.equal(ruleName('co.uk'), 'co.uk');
+  assert.equal(ruleName('com'), 'com');
+});
