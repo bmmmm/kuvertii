@@ -515,6 +515,15 @@ function el(tag, className, text) {
   },
 
   {
+    id: 'verdict-position-unread',
+    promise: 'A verdict the last hop did not write is not presented as one it did.',
+    file: 'js/findings.js',
+    find: `    const below = firstHop !== -1 && headers.indexOf(field) > firstHop;`,
+    replace: `    const below = false;`,
+    mustKill: ['a verdict written below a Received is reported as not the last hop\'s'],
+  },
+
+  {
     id: 'address-literal-ipv4-only',
     promise: 'A link to a bare address is named whichever family the address is from.',
     file: 'js/links.js',

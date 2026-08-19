@@ -1139,9 +1139,35 @@ function authFinding(headers) {
 
   const items = [];
   const verdicts = {};
-  for (const [, mechanism, verdict] of results.matchAll(/\b(spf|dkim|dmarc|arc|bimi)=(\w+)/gi)) {
-    const key = mechanism.toLowerCase();
-    if (!verdicts[key]) verdicts[key] = verdict.toLowerCase();
+
+  // Where the field sat, not only what it said.
+  //
+  // A receiving server prepends its Authentication-Results above every Received
+  // it also writes, so a field sitting *below* a Received was put there before
+  // that hop — by a forwarder, or by whoever sent the message. Nothing else in
+  // the header distinguishes the two, and the field is trivial to write: a
+  // message carrying nothing but a fabricated `spf=pass; dkim=pass; dmarc=pass`
+  // earned the full "every check passed" headline with three green rows under
+  // it, all of them quoting the sender.
+  //
+  // Not treated as forgery, because it routinely is not one — mail forwarded
+  // through a second provider carries the first provider's honest verdict in
+  // exactly this position. So the position is reported rather than judged,
+  // which is what the route card already does one section down when it says
+  // everything before your own provider is whatever the sender claimed.
+  const lower = (name) => name.toLowerCase();
+  const firstHop = headers.findIndex((h) => lower(h.name) === 'received');
+  const resultFields = headers.filter((h) => lower(h.name) === 'authentication-results');
+  const writtenBeforeTheLastHop = {};
+
+  for (const field of resultFields) {
+    const below = firstHop !== -1 && headers.indexOf(field) > firstHop;
+    for (const [, mechanism, verdict] of field.value.matchAll(/\b(spf|dkim|dmarc|arc|bimi)=(\w+)/gi)) {
+      const key = mechanism.toLowerCase();
+      if (verdicts[key]) continue;
+      verdicts[key] = verdict.toLowerCase();
+      writtenBeforeTheLastHop[key] = below;
+    }
   }
 
   // Each verdict needs its own sentence. A single description per mechanism
@@ -1232,6 +1258,26 @@ function authFinding(headers) {
         : (mechanism === 'arc' && arcExplainsDmarc)
           ? 'This is the likeliest reason DMARC failed. A forwarder altered the message and recorded how it looked beforehand; whether that record counts is the receiving side\'s decision, not the sender\'s.'
           : 'Informational — commonly absent even on legitimate mail.',
+    });
+  }
+
+  // Said once, under the rows it qualifies, and before the policy detail that
+  // rests on the same field.
+  const earlier = Object.keys(verdicts).filter((m) => writtenBeforeTheLastHop[m]);
+  if (earlier.length) {
+    // The label names exactly the rows it applies to. "These verdicts" over a
+    // card where two of the three came from the delivering server is the same
+    // disagreement between a headline and its rows that `tone-computed-beside-items`
+    // exists to catch, and it would be arguing against rows that are sound.
+    const named = earlier.map((m) => m.toUpperCase());
+    const all = named.length === Object.keys(verdicts).length;
+    items.push({
+      label: all
+        ? 'These verdicts were not written by the last hop'
+        : `The ${named.join(' and ')} ${named.length === 1 ? 'verdict was' : 'verdicts were'} not written by the last hop`,
+      value: `The Authentication-Results field carrying ${named.join(', ')} sits below a Received, so it was added earlier in the chain than the server that delivered this. That is ordinary on forwarded mail, where it is the first provider's honest answer — and it is also where a fabricated one would sit, because the sender writes everything below their own hop.`,
+      note: 'A receiving server puts its own results above the Received it writes. Read these as worth whatever the hop that wrote them is worth.',
+      level: 'caution',
     });
   }
 

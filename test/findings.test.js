@@ -1040,3 +1040,61 @@ test('a flood of DKIM signatures is bounded, and the warnings survive it', () =>
   ].join('\n'))).find((f) => f.id === 'auth');
   assert.equal(ordinary.items.filter((i) => /DKIM signatures/.test(i.label)).length, 0);
 });
+
+test('a verdict written below a Received is reported as not the last hop\'s', () => {
+  // A receiving server prepends its Authentication-Results above every Received
+  // it also writes, so a field below one was added earlier in the chain. The
+  // field costs nothing to write: a message carrying nothing but a fabricated
+  // `spf=pass; dkim=pass; dmarc=pass` earned the full green headline with three
+  // good rows quoting the sender.
+  const below = analyse(parseHeaders([
+    'From: "PayPal" <service@paypal.com>',
+    'Received: from evil.example by mx.example.net with ESMTP; Mon, 17 Aug 2026 10:00:00 +0000',
+    'Authentication-Results: mx.example.net; spf=pass; dkim=pass; dmarc=pass',
+  ].join('\n'))).find((f) => f.id === 'auth');
+
+  const row = below.items.find((i) => /not written by the last hop/.test(i.label));
+  assert.ok(row, 'the position is stated');
+  assert.equal(row.level, 'caution');
+  assert.equal(row.label, 'These verdicts were not written by the last hop');
+
+  // Reported, not judged: forwarded mail carries the first provider's honest
+  // verdict in exactly this position, so the rows above keep their own levels.
+  assert.equal(below.items.find((i) => /SPF/.test(i.label)).level, 'good');
+
+  // The ordinary arrangement says nothing at all.
+  const above = analyse(parseHeaders([
+    'From: "PayPal" <service@paypal.com>',
+    'Authentication-Results: mx.example.net; spf=pass; dkim=pass; dmarc=pass',
+    'Received: from mail.paypal.com by mx.example.net with ESMTP; Mon, 17 Aug 2026 10:00:00 +0000',
+  ].join('\n'))).find((f) => f.id === 'auth');
+  assert.equal(above.items.find((i) => /not written by the last hop/.test(i.label)), undefined);
+
+  // And the label names only the rows it applies to. Saying "these verdicts"
+  // over a card whose SPF and DMARC came from the delivering server argues
+  // against rows that are sound.
+  const mixed = analyse(parseHeaders([
+    'From: "PayPal" <service@paypal.com>',
+    'Authentication-Results: mx.example.net; spf=fail; dmarc=fail',
+    'Received: from evil.example by mx.example.net with ESMTP; Mon, 17 Aug 2026 10:00:00 +0000',
+    'Authentication-Results: mx.example.net; dkim=pass',
+  ].join('\n'))).find((f) => f.id === 'auth');
+  assert.equal(
+    mixed.items.find((i) => /not written by the last hop/.test(i.label)).label,
+    'The DKIM verdict was not written by the last hop',
+  );
+});
+
+test('ordinary mail does not trip the last-hop check', () => {
+  // The false-positive side of the same rule, on the two real headers the suite
+  // carries. Both put their Authentication-Results above the first Received,
+  // which is what an honest receiver does — and if that ever stops being true
+  // of them, this row would appear on mail that did nothing wrong.
+  for (const header of [BULK_HEADER, MICROSOFT_HEADER]) {
+    const card = analyse(parseHeaders(header)).find((f) => f.id === 'auth');
+    assert.equal(
+      card.items.find((i) => /not written by the last hop/.test(i.label)),
+      undefined,
+    );
+  }
+});
