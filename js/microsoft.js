@@ -241,19 +241,20 @@ export function microsoftVerdicts(headers) {
     });
   }
 
-  // Where the report sat, said once, under the rows that rest on it — the same
-  // treatment Authentication-Results already gets, because the two fields are
-  // written by the same filter and forged by the same hand. In the real M365
-  // fixture the report sits above the first Received; one sitting below a
-  // Received was added before the delivering hop, which is ordinary on mail
-  // forwarded out of a Microsoft mailbox and is also the only place a
-  // fabricated report can sit.
-  const firstHop = headers.findIndex((h) => h.name.toLowerCase() === 'received');
-  if (reports.length && firstHop !== -1 && headers.indexOf(reports[0]) > firstHop) {
+  // Where the report sat, said once, under the rows that rest on it. Below
+  // the LAST Received, not the first: Microsoft's own filter stamps this
+  // field mid-chain on real M365 mail — internal prod.outlook.com hops write
+  // their Received above it after filtering — so "below the first Received"
+  // would cry wolf on every such delivery (measured for the same shape on a
+  // real iCloud Received-SPF the same day). Below every Received is the one
+  // position no receiver produces: nothing delivered before the first hop,
+  // so whatever sits there arrived written.
+  const lastHop = headers.findLastIndex((h) => h.name.toLowerCase() === 'received');
+  if (reports.length && lastHop !== -1 && headers.indexOf(reports[0]) > lastHop) {
     items.push({
-      label: 'This filter report was not written by the last hop',
-      value: 'The X-Forefront-Antispam-Report sits below a Received, so it was added earlier in the chain than the server that delivered this message. That is ordinary on mail forwarded out of a Microsoft mailbox — and it is also where a fabricated report would sit, because the sender writes everything below their own hop.',
-      note: 'Read these rows as worth whatever the hop that wrote them is worth.',
+      label: 'This filter report was not written by any hop above',
+      value: 'The X-Forefront-Antispam-Report sits below every Received, so no server on the delivery path wrote it there — it was already part of the message when the first hop took it. That is where a fabricated report sits, because the sender writes everything below their own hop.',
+      note: 'Read these rows as worth whatever the hand that wrote them is worth.',
       level: 'caution',
     });
   }

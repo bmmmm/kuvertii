@@ -1187,7 +1187,7 @@ test('a Received-SPF below a Received is not quoted as the receiver\'s words', (
 
   const row = forged.items.find((i) => /^Received-SPF/.test(i.label));
   assert.equal(row.level, 'caution');
-  assert.match(row.note, /below a Received/);
+  assert.match(row.note, /below every Received/);
   assert.doesNotMatch(row.note, /receiving server's own words/);
 
   // The side that must stay quiet: in its genuine position, above the first
@@ -1203,6 +1203,26 @@ test('a Received-SPF below a Received is not quoted as the receiver\'s words', (
   assert.match(genuineRow.note, /receiving server's own words/);
 });
 
+test('a Received-SPF mid-chain is not accused — internal hops stack above it', () => {
+  // Found on a real, directly delivered iCloud message the day the check
+  // shipped: iCloud's smtpin host records Received-SPF, then its internal
+  // mailgateway stamps a Received on top, so the receiver's own field sits
+  // below the first Received on every ordinary delivery. The first cut asked
+  // "below the first Received?" and marked it — a fix inheriting its example,
+  // where the probe had only ever built one-Received headers. Only a field
+  // below EVERY Received is one no server on the path can have written.
+  const midChain = analyse(parseHeaders([
+    'Received: from smtpin.mx.example by gateway.mx.example with SMTP; Wed, 19 Aug 2026 11:02:57 +0000',
+    'Received-SPF: pass (mx.example: domain of b.example designates 203.0.113.9 as permitted sender)',
+    'Received: from mail.b.example (mail.b.example [203.0.113.9]) by smtpin.mx.example with ESMTPS; Wed, 19 Aug 2026 11:02:51 +0000',
+    'From: a@b.example',
+  ].join('\n'))).find((f) => f.id === 'auth');
+
+  const row = midChain.items.find((i) => /^Received-SPF/.test(i.label));
+  assert.notEqual(row.level, 'caution');
+  assert.match(row.note, /receiving server's own words/);
+});
+
 test('a forefront report below a Received is marked as an earlier hop\'s', () => {
   // A message that never crossed Microsoft, carrying a fabricated
   // CAT:NONE;SCL:1, rendered "Scored as not spam" with nothing beside it —
@@ -1216,14 +1236,27 @@ test('a forefront report below a Received is marked as an earlier hop\'s', () =>
   ].join('\n')));
 
   const rows = forged.flatMap((f) => f.items);
-  const mark = rows.find((i) => /not written by the last hop/.test(i.label) && /Forefront/.test(i.value));
+  const mark = rows.find((i) => /not written by any hop above/.test(i.label) && /Forefront/.test(i.value));
   assert.ok(mark, 'the position is pointed out');
   assert.equal(mark.level, 'caution');
 
   // The genuine shape — the real fixture has the report above the first
   // Received — carries no such row.
   const genuineRows = msReport().flatMap((f) => f.items);
-  assert.ok(!genuineRows.some((i) => /not written by the last hop/.test(i.label) && /Forefront/.test(i.value)));
+  assert.ok(!genuineRows.some((i) => /not written by any hop above/.test(i.label)));
+
+  // And the shape real M365 mail actually has: internal prod.outlook.com hops
+  // stamp their Received above the report after filtering, so the receiver's
+  // own report sits mid-chain on every ordinary delivery. Measured for the
+  // same structure on a real iCloud Received-SPF — "below the first Received"
+  // would cry wolf here.
+  const midChain = analyse(parseHeaders([
+    'Received: from internal.prod.example by mailbox.prod.example with SMTP; Mon, 17 Aug 2026 10:00:02 +0000',
+    'X-Forefront-Antispam-Report: CIP:203.0.113.9;CTRY:US;CAT:NONE;SCL:1;DIR:INB',
+    'Received: from mail.b.example by protection.example with ESMTPS; Mon, 17 Aug 2026 10:00:00 +0000',
+    'From: a@b.example',
+  ].join('\n'))).flatMap((f) => f.items);
+  assert.ok(!midChain.some((i) => /not written by any hop above/.test(i.label)));
 });
 
 test('a second forefront report is named, not silently unreachable', () => {
@@ -1246,6 +1279,70 @@ test('a second forefront report is named, not silently unreachable', () => {
   // One report — the ordinary case — says nothing about copies.
   const single = msReport().flatMap((f) => f.items);
   assert.ok(!single.some((i) => /appears \d+ times/.test(i.label) && /Forefront/.test(i.label)));
+});
+
+test('a receiver\'s copy of the whole DMARC record is read, never printed raw', () => {
+  // iCloud writes X-DMARC-Policy carrying the record it fetched, verbatim. A
+  // real message rendered the whole thing — "v=DMARC1; p=reject; adkim=s;
+  // aspf=r; rf=afrf; pct=100;." — as the value of "Published DMARC policy",
+  // where the reader was owed one word.
+  const rows = analyse(parseHeaders([
+    'From: a@b.example',
+    'Authentication-Results: mx.example; spf=pass; dkim=pass; dmarc=pass',
+    'X-DMARC-Policy: v=DMARC1; p=reject; adkim=s; aspf=r; rf=afrf; sp=none; pct=100;',
+  ].join('\n'))).find((f) => f.id === 'auth').items;
+
+  const row = rows.find((i) => i.label === 'Published DMARC policy');
+  assert.match(row.value, /^reject\./);
+  assert.doesNotMatch(row.value, /v=DMARC1|adkim|rf=|pct/);
+  // The record is the source for the policy tags too, not just the p= word.
+  assert.match(row.value, /Subdomains: none/);
+
+  // A receiver that writes just the bare word is still read.
+  const bare = analyse(parseHeaders([
+    'From: a@b.example',
+    'Authentication-Results: mx.example; spf=pass; dkim=pass; dmarc=pass',
+    'X-DMARC-Policy: quarantine',
+  ].join('\n'))).find((f) => f.id === 'auth').items;
+  assert.match(bare.find((i) => i.label === 'Published DMARC policy').value, /^quarantine\./);
+});
+
+test('a recipient named only in Original-Recipient is named in the clear', () => {
+  // From a real iCloud message: no To: at all, the recipient openly in
+  // Original-Recipient, plus encoded copies. One card said "no recipient is
+  // named in the clear, so there is nothing to compare the encoded copies
+  // against" while the card beneath it compared those copies against the
+  // openly written address it had just read out of Original-Recipient — and
+  // the recipient card's lede leaned on "the visible To: field" of a message
+  // that had none.
+  const findings = analyse(parseHeaders([
+    'From: news@list.example',
+    'Received: from a by b with ESMTPS; Mon, 17 Aug 2026 10:00:00 +0000',
+    'Original-Recipient: rfc822;alice@b.example',
+    'List-Unsubscribe: <https://x.example/u?e=YWxpY2VAYi5leGFtcGxl>',
+  ].join('\n')));
+
+  const completeness = findings.find((f) => f.id === 'completeness');
+  if (completeness) {
+    assert.ok(
+      !completeness.items.some((i) => /named in the clear|nothing to compare/.test(`${i.label} ${i.value}`)),
+      'the recipient IS named in the clear, one field over',
+    );
+  }
+
+  const recipients = findings.find((f) => f.id === 'recipients');
+  assert.ok(recipients, 'the encoded copy is still found and attributed');
+  assert.match(recipients.lede, /There is no To: field/);
+  assert.doesNotMatch(recipients.lede, /visible To: field/);
+
+  // The still-working side: with a To: present, the original lede stands.
+  const withTo = analyse(parseHeaders([
+    'From: news@list.example',
+    'To: alice@b.example',
+    'Received: from a by b with ESMTPS; Mon, 17 Aug 2026 10:00:00 +0000',
+    'List-Unsubscribe: <https://x.example/u?e=YWxpY2VAYi5leGFtcGxl>',
+  ].join('\n'))).find((f) => f.id === 'recipients');
+  assert.match(withTo.lede, /visible To: field/);
 });
 
 test('two Return-Path lines naming different addresses are pointed out', () => {

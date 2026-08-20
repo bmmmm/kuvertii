@@ -647,7 +647,7 @@ function el(tag, className, text) {
     id: 'received-spf-always-receivers-words',
     promise: 'A field is quoted as the receiver\'s words only where a receiver would have put it.',
     file: 'js/findings.js',
-    find: `      const below = firstHop !== -1 && headers.indexOf(receivedSpfField) > firstHop;`,
+    find: `      const below = lastHop !== -1 && headers.indexOf(receivedSpfField) > lastHop;`,
     replace: `      const below = false;`,
     mustKill: ['a Received-SPF below a Received is not quoted as the receiver\'s words'],
     // The original, in effect: the note always read "The receiving server's
@@ -655,12 +655,35 @@ function el(tag, className, text) {
   },
 
   {
+    id: 'received-spf-first-hop-cries-wolf',
+    promise: 'The receiver\'s own Received-SPF, sitting mid-chain, is not accused.',
+    file: 'js/findings.js',
+    find: `      const below = lastHop !== -1 && headers.indexOf(receivedSpfField) > lastHop;`,
+    replace: `      const below = firstHop !== -1 && headers.indexOf(receivedSpfField) > firstHop;`,
+    mustKill: ['a Received-SPF mid-chain is not accused — internal hops stack above it'],
+    // The first cut of the check, caught on a real iCloud message the day it
+    // shipped: smtpin records the check, mailgateway stamps a Received on
+    // top, and "below the first Received" marked the receiver's own field.
+  },
+
+  {
     id: 'forefront-position-unread',
-    promise: 'A Microsoft filter report written before the last hop is marked as such.',
+    promise: 'A Microsoft filter report no hop wrote is marked as arriving pre-written.',
     file: 'js/microsoft.js',
-    find: `  if (reports.length && firstHop !== -1 && headers.indexOf(reports[0]) > firstHop) {`,
+    find: `  if (reports.length && lastHop !== -1 && headers.indexOf(reports[0]) > lastHop) {`,
     replace: `  if (false) {`,
     mustKill: ['a forefront report below a Received is marked as an earlier hop\'s'],
+  },
+
+  {
+    id: 'forefront-first-hop-cries-wolf',
+    promise: 'Microsoft\'s own mid-chain filter report is not accused.',
+    file: 'js/microsoft.js',
+    find: `  const lastHop = headers.findLastIndex((h) => h.name.toLowerCase() === 'received');`,
+    replace: `  const lastHop = headers.findIndex((h) => h.name.toLowerCase() === 'received');`,
+    mustKill: ['a forefront report below a Received is marked as an earlier hop\'s'],
+    // Real M365 mail carries internal Received lines above the report; asking
+    // "below the first Received?" cries wolf on every ordinary delivery.
   },
 
   {
@@ -672,6 +695,40 @@ function el(tag, className, text) {
     mustKill: ['a second forefront report is named, not silently unreachable'],
     // The probe put a fabricated CAT:NONE above Microsoft's real CAT:PHSH and
     // the phishing verdict was not merely unreported but unreachable.
+  },
+
+  {
+    id: 'original-recipient-not-in-the-clear',
+    promise: 'A field that names the recipient counts as naming the recipient.',
+    file: 'js/findings.js',
+    find: `const RECIPIENT_PRESENT = ['to', 'cc', 'delivered-to', 'x-original-to', 'envelope-to', 'x-rcpt-to', 'original-recipient'];`,
+    replace: `const RECIPIENT_PRESENT = ['to', 'cc', 'delivered-to', 'x-original-to', 'envelope-to'];`,
+    mustKill: ['a recipient named only in Original-Recipient is named in the clear'],
+    // The original list. A real iCloud message carried Original-Recipient and
+    // rendered "no recipient is named in the clear" one card above the card
+    // reading the recipient openly out of exactly that field.
+  },
+
+  {
+    id: 'lede-leans-on-missing-to',
+    promise: 'No sentence leans on a field the paste does not carry.',
+    file: 'js/findings.js',
+    find: `  const hasTo = Boolean(get(headers, 'to').trim());`,
+    replace: `  const hasTo = true;`,
+    mustKill: ['a recipient named only in Original-Recipient is named in the clear'],
+  },
+
+  {
+    id: 'dmarc-record-printed-raw',
+    promise: 'A policy row prints a policy word, never a raw record.',
+    file: 'js/findings.js',
+    find: `  const policy = record.match(/\\bp=(none|quarantine|reject)\\b/i)?.[1]
+    ?? fieldRecord.trim().match(/^(none|quarantine|reject)$/i)?.[1];`,
+    replace: `  const policy = fieldRecord || dmarc.match(/\\bp=(none|quarantine|reject)\\b/i)?.[1];`,
+    mustKill: ['a receiver\'s copy of the whole DMARC record is read, never printed raw'],
+    // The original. iCloud's X-DMARC-Policy carries the fetched record
+    // verbatim, and a real message rendered "v=DMARC1; p=reject; adkim=s;
+    // aspf=r; rf=afrf; pct=100;." as the published policy.
   },
 
   {

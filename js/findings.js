@@ -273,7 +273,12 @@ const EXPECTED_FIELDS = [
   ['received', 'Received', 'the route is missing entirely — that is usually the bulk of a header'],
 ];
 
-const RECIPIENT_PRESENT = ['to', 'cc', 'delivered-to', 'x-original-to', 'envelope-to'];
+// Every field that can name the recipient in the clear — the sender-written
+// pair, the delivery stamps, and Original-Recipient (RFC 3798), which a real
+// iCloud message carried while this list did not know it. That message
+// rendered "no recipient is named in the clear" on one card while the card
+// beneath it read the recipient openly out of Original-Recipient.
+const RECIPIENT_PRESENT = ['to', 'cc', 'delivered-to', 'x-original-to', 'envelope-to', 'x-rcpt-to', 'original-recipient'];
 
 // Fields naming the mailbox this copy was actually delivered to. Unlike To:,
 // which the sender writes, these are added by the receiving side — so an
@@ -518,12 +523,20 @@ function recipientFinding(headers) {
 
   const encodedCount = [...hidden.values()].reduce((n, e) => n + e.length, 0);
 
+  // The lede must not lean on a field the paste does not carry: measured on a
+  // real message with no To: at all, it read "more times than the visible To:
+  // field suggests" one card below "To is missing".
+  const hasTo = Boolean(get(headers, 'to').trim());
+  const times = `${encodedCount} ${encodedCount === 1 ? 'time' : 'times'}`;
+
   return {
     id: 'recipients',
     title: 'Who this was actually addressed to',
     tone: encodedCount ? 'alert' : 'info',
     lede: encodedCount
-      ? `The recipient address appears ${encodedCount} more ${encodedCount === 1 ? 'time' : 'times'} than the visible To: field suggests, each one encoded. Encoding is not encryption — it is just a step that assumes nobody looks.`
+      ? hasTo
+        ? `The recipient address appears ${encodedCount} more ${encodedCount === 1 ? 'time' : 'times'} than the visible To: field suggests, each one encoded. Encoding is not encryption — it is just a step that assumes nobody looks.`
+        : `There is no To: field, and the recipient address still appears ${times} in encoded form. Encoding is not encryption — it is just a step that assumes nobody looks.`
       : 'The addresses this message names as its destination.',
     items,
   };
@@ -1308,9 +1321,17 @@ function authFinding(headers) {
   // the SPF result comes first — used to make this row read `p=reject` on a
   // message whose own header said `(p=NONE)`.
   const dmarc = dmarcSpan(results);
-  const policy = get(headers, 'x-dmarc-policy') || dmarc.match(/\bp=(none|quarantine|reject)\b/i)?.[1];
+  // X-DMARC-Policy is the receiver's copy of the record it fetched, and on
+  // iCloud it carries the whole record, not a policy word. It used to be
+  // printed raw: a real message rendered "v=DMARC1; p=reject; adkim=s;
+  // aspf=r; rf=afrf; pct=100;." as the published policy. Both sources now get
+  // the same scoped read; a field holding just the bare word still counts.
+  const fieldRecord = get(headers, 'x-dmarc-policy');
+  const record = /\bp=/i.test(fieldRecord) ? fieldRecord : dmarc;
+  const policy = record.match(/\bp=(none|quarantine|reject)\b/i)?.[1]
+    ?? fieldRecord.trim().match(/^(none|quarantine|reject)$/i)?.[1];
   if (policy) {
-    const tag = (name) => dmarc.match(new RegExp(`\\b${name}=([A-Za-z]+)\\b`, 'i'))?.[1];
+    const tag = (name) => record.match(new RegExp(`\\b${name}=([A-Za-z]+)\\b`, 'i'))?.[1];
     const subdomain = tag('sp');
     const nonExistent = tag('np');
     const testing = tag('t');
@@ -1387,16 +1408,22 @@ function authFinding(headers) {
     const explanation = rest.join(' ').replace(/^\((.*)\)$/, '$1').trim();
     if (explanation) {
       // RFC 7208 §9.1 has the receiver prepend this field above the Received
-      // it writes, exactly like Authentication-Results. One sitting below a
-      // Received was added before the delivering hop — and quoting that as
-      // "the receiving server's own words" put this tool's voice behind a
-      // sentence the sender may have written.
-      const below = firstHop !== -1 && headers.indexOf(receivedSpfField) > firstHop;
+      // it writes — and internal hops after the check stack their Received
+      // above it, so a genuine one routinely sits mid-chain. The first cut of
+      // this check asked "below the first Received?" and marked iCloud's own
+      // Received-SPF on a directly delivered message, because iCloud stamps
+      // smtpin's check and then mailgateway's Received on top. Below the LAST
+      // Received is the position no receiver produces: nothing delivered
+      // before the first hop, so whatever sits there was written by the
+      // sender — and quoting that as "the receiving server's own words" put
+      // this tool's voice behind a sentence the sender may have written.
+      const lastHop = headers.findLastIndex((h) => h.name.toLowerCase() === 'received');
+      const below = lastHop !== -1 && headers.indexOf(receivedSpfField) > lastHop;
       items.push({
         label: `Received-SPF: ${outcome.replace(/[^A-Za-z]/g, '')}`,
         value: explanation,
         note: below
-          ? 'This field sits below a Received, so it was added earlier in the chain than the server that delivered the message — ordinary on forwarded mail, and also where a fabricated one would sit. A receiver records its own check above the Received it writes.'
+          ? 'This field sits below every Received, so no server on the delivery path wrote it — it was already part of the message when the first hop took it, which is where a fabricated one sits. A receiver records its check above the Received it writes.'
           : 'The receiving server\'s own words, recorded as it made the decision.',
         level: below ? 'caution' : undefined,
       });
