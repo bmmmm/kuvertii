@@ -167,6 +167,7 @@ function contradictionFinding(headers) {
   if (!items.length) return null;
 
   return {
+    id: 'contradictions',
     title: 'This header says the same thing twice',
     tone: 'alert',
     lede: 'Fields that may appear only once appear more than once. Which value counts depends on which program is reading, and that is the point of writing it this way.',
@@ -242,6 +243,7 @@ function controlCharacterFinding(headers, findings) {
   if (!items.length) return null;
 
   return {
+    id: 'controls',
     title: 'This header carries instructions, not just text',
     tone: 'alert',
     lede: 'Some of these fields contain bytes that a terminal obeys as commands and a browser uses to reorder what you see. They are shown inert everywhere below — <1b> was an escape byte, <U+202E> reverses reading direction — so that reading this report cannot act on them.',

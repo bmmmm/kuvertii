@@ -192,6 +192,25 @@ test('an ordinary header produces no such finding at all', () => {
   assert.doesNotMatch(findings[0].title, /instructions/i);
 });
 
+test('two alerts firing together keep distinct, addressable ids', () => {
+  // A real message in the corpus did exactly this: a duplicated singleton field
+  // AND a control byte in another. Both are alerts, both live at the front of
+  // the report, and both were shipping without an id — so a selector asking for
+  // one answered with whichever the array put first. Every other finding is
+  // reached by `find(f => f.id === ...)`; these two could only be reached by
+  // position, which is the fragility this pins shut.
+  const findings = analyse(parseHeaders(header(
+    'From: someone-else@sender.example', // a second From beside HEAD's → contradictions
+    `Subject: ${ESC}]52;c;AAAA${BEL} hello`, // a control byte in a value → controls
+  )));
+
+  const ids = findings.map((f) => f.id);
+  assert.ok(ids.every(Boolean), `every finding carries an id; got ${JSON.stringify(ids)}`);
+  assert.equal(new Set(ids).size, ids.length, 'no two findings answer to the same id');
+  assert.ok(findings.some((f) => f.id === 'contradictions'), 'the duplicate-field alert is addressable by id');
+  assert.ok(findings.some((f) => f.id === 'controls'), 'the control-byte alert is addressable by id');
+});
+
 // ---------------------------------------------------------------- the module
 
 test('neutralise names the byte it replaced', () => {

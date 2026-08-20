@@ -186,6 +186,30 @@ function neutraliseDisabledByMutation(text) {
   },
 
   {
+    id: 'contradictions-finding-anonymous',
+    promise: 'A duplicated-field alert is reachable by its id, never only by its position.',
+    file: 'js/findings.js',
+    find: `    id: 'contradictions',`,
+    replace: `    id: undefined,`,
+    mustKill: ['two alerts firing together keep distinct, addressable ids'],
+    // A real message carried a duplicated singleton beside a control byte, and
+    // this finding shipped with no id while every other one had one — so a
+    // selector asking for it by id got whichever alert the array put first.
+  },
+
+  {
+    id: 'controls-finding-anonymous',
+    promise: 'A control-byte alert is reachable by its id, never only by its position.',
+    file: 'js/findings.js',
+    find: `    id: 'controls',`,
+    replace: `    id: undefined,`,
+    mustKill: ['two alerts firing together keep distinct, addressable ids'],
+    // The other half of the same omission: the control-characters finding sat at
+    // the front of the report addressable only by position, which the tests it
+    // had could reach but a caller keyed on id could not.
+  },
+
+  {
     id: 'controls-listed-not-categorised',
     promise: 'Every control and format character is caught, not a list of them.',
     file: 'js/control.js',
