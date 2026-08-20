@@ -1099,6 +1099,45 @@ test('ordinary mail does not trip the last-hop check', () => {
   }
 });
 
+test('an Authentication-Results mid-chain is not accused — internal hops stack above it', () => {
+  // The corpus made this concrete: the caution fired on all 25 real messages,
+  // 17 of them delivered directly with no forwarding, each time accusing the
+  // delivering provider's own results. The reason is the same one already
+  // proven wrong for Received-SPF and the Forefront report — a receiver writes
+  // its Authentication-Results above the Received it stamps, but internal hops
+  // after the check stack their own Received on top, so a genuine, honest A-R
+  // sits BELOW the first Received on every ordinary delivery. Only below EVERY
+  // Received is the position no receiver produces. The two fixtures this suite
+  // carried never had a Received above their A-R, so 431 tests never saw it.
+  const midChain = analyse(parseHeaders([
+    'From: "PayPal" <service@paypal.com>',
+    'Received: by relay.icloud.example (LMTP) id 42; Mon, 17 Aug 2026 10:00:02 +0000',
+    'Authentication-Results: mx.icloud.example; spf=pass; dkim=pass; dmarc=pass',
+    'Received: from mail.paypal.com by mx.icloud.example; Mon, 17 Aug 2026 10:00:00 +0000',
+  ].join('\n'))).find((f) => f.id === 'auth');
+  assert.equal(
+    midChain.items.find((i) => /not written by the last hop/.test(i.label)),
+    undefined,
+    'a field with a Received below it was written on the delivery path, not before it',
+  );
+
+  // And the genuine target survives the correction: an A-R below EVERY Received
+  // — nothing was delivered before the first hop, so a field there was placed by
+  // the sender or a forwarder — still earns the caution. Same header, the A-R
+  // moved below the last hop.
+  const belowEvery = analyse(parseHeaders([
+    'From: "PayPal" <service@paypal.com>',
+    'Received: by relay.icloud.example (LMTP) id 42; Mon, 17 Aug 2026 10:00:02 +0000',
+    'Received: from mail.paypal.com by mx.icloud.example; Mon, 17 Aug 2026 10:00:00 +0000',
+    'Authentication-Results: mx.icloud.example; spf=pass; dkim=pass; dmarc=pass',
+  ].join('\n'))).find((f) => f.id === 'auth');
+  assert.equal(
+    belowEvery.items.find((i) => /not written by the last hop/.test(i.label))?.level,
+    'caution',
+    'a field below every Received is still reported as pre-delivery-path',
+  );
+});
+
 test('a bad reason row denies the all-clear headline, even when every verdict passed', () => {
   // A generative probe over full messages found this: Microsoft's
   // `compauth=pass reason=000` writes a good compauth row AND a bad row saying

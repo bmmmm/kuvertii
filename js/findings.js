@@ -1196,26 +1196,35 @@ function authFinding(headers) {
 
   // Where the field sat, not only what it said.
   //
-  // A receiving server prepends its Authentication-Results above every Received
-  // it also writes, so a field sitting *below* a Received was put there before
-  // that hop — by a forwarder, or by whoever sent the message. Nothing else in
-  // the header distinguishes the two, and the field is trivial to write: a
-  // message carrying nothing but a fabricated `spf=pass; dkim=pass; dmarc=pass`
-  // earned the full "every check passed" headline with three green rows under
-  // it, all of them quoting the sender.
+  // A receiving server prepends its Authentication-Results above the Received it
+  // also writes — so the position no receiver produces is below EVERY Received:
+  // nothing was delivered before the first hop, so a field there was put in
+  // place by a forwarder or by whoever sent the message. The field is trivial to
+  // write: a message carrying nothing but a fabricated `spf=pass; dkim=pass;
+  // dmarc=pass` earned the full "every check passed" headline with three green
+  // rows under it, all of them quoting the sender.
   //
-  // Not treated as forgery, because it routinely is not one — mail forwarded
-  // through a second provider carries the first provider's honest verdict in
-  // exactly this position. So the position is reported rather than judged,
-  // which is what the route card already does one section down when it says
-  // everything before your own provider is whatever the sender claimed.
+  // Below the FIRST Received is NOT that position, and asking it there was wrong:
+  // internal hops after the check stack their own Received above the border
+  // server's A-R, so a genuine, honestly-written verdict routinely sits
+  // mid-chain. The corpus made that concrete — this caution fired on all 25 real
+  // messages, 17 of them delivered directly with no forwarding at all, each time
+  // calling the delivering provider's own results "not written by the last hop".
+  // Received-SPF and the Forefront report were already moved off the first-hop
+  // test onto the every-hop one; this is the same fix, late to the third check.
+  //
+  // Not treated as forgery even when it does fire, because it routinely is not
+  // one — mail forwarded through a second provider carries the first provider's
+  // honest verdict in exactly this position. So the position is reported rather
+  // than judged, which is what the route card already does one section down when
+  // it says everything before your own provider is whatever the sender claimed.
   const lower = (name) => name.toLowerCase();
-  const firstHop = headers.findIndex((h) => lower(h.name) === 'received');
+  const lastHop = headers.findLastIndex((h) => lower(h.name) === 'received');
   const resultFields = headers.filter((h) => lower(h.name) === 'authentication-results');
   const writtenBeforeTheLastHop = {};
 
   for (const field of resultFields) {
-    const below = firstHop !== -1 && headers.indexOf(field) > firstHop;
+    const below = lastHop !== -1 && headers.indexOf(field) > lastHop;
     for (const [, mechanism, verdict] of field.value.matchAll(/\b(spf|dkim|dmarc|arc|bimi)=(\w+)/gi)) {
       const key = mechanism.toLowerCase();
       if (verdicts[key]) continue;

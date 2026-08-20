@@ -558,9 +558,22 @@ function el(tag, className, text) {
     id: 'verdict-position-unread',
     promise: 'A verdict the last hop did not write is not presented as one it did.',
     file: 'js/findings.js',
-    find: `    const below = firstHop !== -1 && headers.indexOf(field) > firstHop;`,
+    find: `    const below = lastHop !== -1 && headers.indexOf(field) > lastHop;`,
     replace: `    const below = false;`,
     mustKill: ['a verdict written below a Received is reported as not the last hop\'s'],
+  },
+
+  {
+    id: 'auth-first-hop-cries-wolf',
+    promise: 'The delivering provider\'s own Authentication-Results, sitting mid-chain, is not accused.',
+    file: 'js/findings.js',
+    find: `  const lastHop = headers.findLastIndex((h) => lower(h.name) === 'received');`,
+    replace: `  const lastHop = headers.findIndex((h) => lower(h.name) === 'received');`,
+    mustKill: ['an Authentication-Results mid-chain is not accused — internal hops stack above it'],
+    // The standing gap made concrete by the corpus: "below the first Received"
+    // accused the delivering provider's own results on all 25 real messages, 17
+    // with no forwarding. Received-SPF and Forefront were corrected months
+    // earlier; this is the same fix arriving late to the third check.
   },
 
   {
@@ -730,8 +743,8 @@ function el(tag, className, text) {
     id: 'received-spf-first-hop-cries-wolf',
     promise: 'The receiver\'s own Received-SPF, sitting mid-chain, is not accused.',
     file: 'js/findings.js',
-    find: `      const below = lastHop !== -1 && headers.indexOf(receivedSpfField) > lastHop;`,
-    replace: `      const below = firstHop !== -1 && headers.indexOf(receivedSpfField) > firstHop;`,
+    find: `      const lastHop = headers.findLastIndex((h) => h.name.toLowerCase() === 'received');`,
+    replace: `      const lastHop = headers.findIndex((h) => h.name.toLowerCase() === 'received');`,
     mustKill: ['a Received-SPF mid-chain is not accused — internal hops stack above it'],
     // The first cut of the check, caught on a real iCloud message the day it
     // shipped: smtpin records the check, mailgateway stamps a Received on
