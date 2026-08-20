@@ -64,6 +64,38 @@ const KNOWN_FIELDS = new Set([
 const MARKUP_RE = /<(?:!doctype|html|head|body|div|table|tbody|tr|td|p|a|img|span|center|font|style|meta|br)[\s>/]/i;
 
 /**
+ * The type a body is read as, which is not always the type it declares.
+ *
+ * A body that is visibly markup, read as plain text, hides every href behind
+ * its angle brackets: the link card then tallies the decoy text a reader sees
+ * instead of the destinations underneath it. That is the one thing this tool
+ * promises not to do, so content wins over the declaration — and the
+ * declaration is written by the sender, who is the party that benefits from
+ * the misreading. `Content-Type: text/plain` over an HTML body had the report
+ * name the anchor text as the destination and never mention the host the link
+ * actually goes to.
+ *
+ * Only an absent or `text/*` declaration is second-guessed. A part that says
+ * it is a PDF or an image is taken at its word: those are read for their first
+ * bytes, not their text, and a hex string inside one is not a `<p>` tag.
+ */
+function typeForContent(declared, body) {
+  const parsed = parseContentType(declared);
+  if (parsed.type === 'text/html') return parsed;
+  const openToReading = !String(declared ?? '').trim() || parsed.type.startsWith('text/');
+  if (!openToReading || !MARKUP_RE.test(body)) return parsed;
+  // Only the reading changes. Every parameter the declaration carried is kept
+  // — the charset above all, since it is what turns the bytes into text, and
+  // replacing the whole descriptor dropped it: a `text/html; charset=utf-8`
+  // part came back out of here with no charset at all. `declaredType` keeps
+  // what the message offered this part as, which is a different question from
+  // how it is read: the plain/html divergence card pairs the two versions of a
+  // multipart/alternative by what they were offered as, and reading a plain
+  // part as markup silently unpaired them.
+  return { ...parsed, type: 'text/html', declaredType: parsed.type };
+}
+
+/**
  * Does this block of text carry a recognisable mail header?
  *
  * Runs the real parser over the front of the block rather than a cheap regex,
@@ -126,19 +158,43 @@ export function bodyClippedNote(originalLength) {
 }
 
 /**
+ * The opening sentence of the closing tally: what was read.
+ *
+ * One wording for both front ends, for the reason clippedNote was unified —
+ * two copies of a sentence drift, and this one drifted into saying nothing at
+ * all. Built by joining the non-zero counts, it produced a bare `" read."`
+ * with no subject whenever both were zero: a body-only paste under
+ * `--headers-only` on the command line, and on the page a body-only paste
+ * whose parseParts degraded to no parts. The line whose entire job is to be a
+ * complete account of the input could not say that the input had not been
+ * read.
+ */
+export function readTally(headerCount, partCount) {
+  const read = [
+    headerCount ? `${headerCount} header field${headerCount === 1 ? '' : 's'}` : null,
+    partCount ? `${partCount} body part${partCount === 1 ? '' : 's'}` : null,
+  ].filter(Boolean).join(' and ');
+  return read ? `${read} read.` : 'Nothing was read.';
+}
+
+/**
  * Walk the MIME structure and return every leaf part, decoded within limits.
  *
- * A part is { contentType, charset, disposition, filename, transferEncoding,
- * bytesDeclared, text, head, clipped }. `text` is the decoded content for
+ * A part is { contentType, declaredType, charset, disposition, filename,
+ * transferEncoding, bytesDeclared, text, head, clipped }. `contentType` is how
+ * the part is read and `declaredType` is what the message offered it as — the
+ * two differ where content outranked a declaration, and the second answers
+ * "which version of this message is this", which the first cannot.
+ * `text` is the decoded content for
  * text/* parts and null for everything else — an attachment is never decoded
  * beyond `head`, the first few bytes kept for a type check. `bytesDeclared`
  * is the size= parameter when the sender stated one, otherwise the decoded
  * size as computed from the encoded length.
  *
- * Malformed MIME degrades to one opaque part, never to a throw: a boundary
- * that never appears, a multipart with no boundary parameter, nesting past
- * the depth ceiling — each keeps whatever content it wraps as a single
- * undecoded part, and the ceilings announce themselves in `notes`.
+ * Malformed MIME degrades to one part, never to a throw: a boundary that
+ * never appears, a multipart with no boundary parameter, nesting past the
+ * depth ceiling — each keeps whatever content it wraps as a single part, and
+ * every one of those outcomes announces itself in `notes`.
  */
 export function parseParts(headers, bodyText) {
   const notes = [];
@@ -151,17 +207,9 @@ export function parseParts(headers, bodyText) {
   }
 
   const parts = [];
-  const state = { overflow: 0, tooDeep: false, partClipped: false };
+  const state = { overflow: 0, tooDeep: false, partClipped: false, unreadableStructure: false };
   const declared = get(headers, 'content-type');
-  // A body-only paste has no header to declare a type, and a header block
-  // without one defaults to text/plain — but a body that is visibly markup
-  // read as plain text hides every href behind its angle brackets, and the
-  // link card then tallies the decoy text a reader sees instead of the
-  // destinations underneath it. What the reader's mail client would render
-  // as HTML is read as HTML.
-  const contentType = !declared.trim() && MARKUP_RE.test(body)
-    ? parseContentType('text/html')
-    : parseContentType(declared);
+  const contentType = typeForContent(declared, body);
   const disposition = parseDisposition(get(headers, 'content-disposition'), contentType);
   const encoding = normalEncoding(get(headers, 'content-transfer-encoding'));
 
@@ -176,6 +224,9 @@ export function parseParts(headers, bodyText) {
   if (state.partClipped) {
     notes.push(` A body part was larger than ${Math.round(MAX_PART_TEXT / (1024 * 1024))} MB; only its first ${Math.round(MAX_PART_TEXT / (1024 * 1024))} MB were read.`);
   }
+  if (state.unreadableStructure) {
+    notes.push(' The message says it is made of several parts but names a boundary that never appears in it, so the parts could not be told apart; what was there was read as one.');
+  }
   return { parts, notes };
 }
 
@@ -189,15 +240,25 @@ function walk(contentType, encoding, disposition, body, depth, parts, state) {
     const sections = contentType.boundary ? splitMultipart(body, contentType.boundary) : [];
     if (!sections.length) {
       // No boundary parameter, or a boundary that never appears in the body.
-      // Either way the structure is unreadable and the content is not: one
-      // opaque part keeps it accounted for.
-      leaf(contentType, encoding, disposition, body, parts, state, { opaque: true });
+      // The structure is unreadable — the content is not, and keeping it as
+      // one opaque part threw the whole message away in silence: a lookalike
+      // link and a tracking pixel drew no card at all, while the tally still
+      // said a body part had been read. One `boundary=` the sender never uses
+      // cost nothing to write and emptied the report.
+      //
+      // So the bytes are read for what they look like, exactly as an
+      // undeclared body is, and the fact that the structure could not be
+      // followed is announced — the other three unreadable outcomes here
+      // (too deep, too many parts, too large) all say so, and this one is the
+      // only one the sender can trigger for free.
+      state.unreadableStructure = true;
+      leaf(typeForContent('', body), encoding, disposition, body, parts, state, {});
       return;
     }
     for (const section of sections) {
       const { headerText, body: sectionBody } = splitSection(section);
       const { headers } = readHeaders(headerText);
-      const childType = parseContentType(get(headers, 'content-type'));
+      const childType = typeForContent(get(headers, 'content-type'), sectionBody);
       const childDisposition = parseDisposition(get(headers, 'content-disposition'), childType);
       const childEncoding = normalEncoding(get(headers, 'content-transfer-encoding'));
       walk(childType, childEncoding, childDisposition, sectionBody, depth + 1, parts, state);
@@ -218,6 +279,7 @@ function leaf(contentType, encoding, disposition, body, parts, state, { opaque =
 
   parts.push({
     contentType: contentType.type,
+    declaredType: contentType.declaredType ?? contentType.type,
     charset: contentType.charset,
     disposition: disposition.disposition,
     filename: disposition.filename,
@@ -396,13 +458,19 @@ function parseDisposition(value, contentType) {
   const raw = String(value ?? '').trim();
   const name = extendedParameter(raw, 'filename') ?? parameter(raw, 'filename')
     ?? contentType.extendedName ?? contentType.name;
-  const size = Number(parameter(raw, 'size'));
+  // `size=` is optional and most mailers never write it. `Number(null)` is 0,
+  // so an absent parameter passed the safe-integer check as a stated size of
+  // zero, `bytesDeclared` never fell through to the size actually decoded, and
+  // the attachment inventory printed "0 bytes" for an ordinary PDF — the
+  // honest "size unstated" branch was unreachable in exactly the common case.
+  const declared = parameter(raw, 'size');
+  const size = declared === null ? null : Number(declared);
   return {
     disposition: raw.match(/^([A-Za-z-]{1,32})/)?.[1]?.toLowerCase() ?? null,
     // RFC 2047 in a filename is nonstandard and everywhere; decoding it is
     // what makes `=?utf-8?B?...?=.pdf` legible enough to warn about.
     filename: name ? decodeEncodedWords(name).slice(0, 255) : null,
-    size: Number.isSafeInteger(size) && size >= 0 ? size : null,
+    size: size !== null && Number.isSafeInteger(size) && size >= 0 ? size : null,
   };
 }
 

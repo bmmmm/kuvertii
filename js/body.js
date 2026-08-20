@@ -40,6 +40,27 @@ function party(host) {
 }
 
 /**
+ * Every destination an HTML part offers a reader — hrefs and form actions are
+ * only part of the answer.
+ *
+ * A URL written into the visible text of an HTML mail, with no anchor around
+ * it, is turned into a live link by every mail client that renders the part;
+ * a great deal of ordinary bulk mail is written that way. Reading only the
+ * hrefs meant such a message drew no link card at all — a body whose one
+ * destination was `https://tracker.example/click?u=…`, typed out in a
+ * paragraph, produced silence.
+ *
+ * A URL that *is* a link's own text is not one of these: it is the claim the
+ * link makes about itself, judged against the href by the mismatch rule, and
+ * counting it as a destination would put the decoy back on the card as a place
+ * the message goes.
+ */
+function autolinkedUrls(scan) {
+  const claimed = new Set(scan.links.flatMap((link) => extractUrls(link.text)));
+  return extractUrls(scan.text).filter((url) => !claimed.has(url));
+}
+
+/**
  * Findings out of the body parts, fault-isolated like every header section.
  *
  * `bodyOnly` marks a paste that carried no recognisable header: the notice it
@@ -49,7 +70,7 @@ function party(host) {
  */
 export function analyseBody(parts, { headers = [], bodyOnly = false } = {}) {
   const findings = [];
-  if (bodyOnly) findings.push(bodyOnlyNotice());
+  if (bodyOnly) findings.push(bodyOnlyNotice(Boolean(parts?.length)));
   if (!parts?.length) return findings;
 
   // One markup scan per part, shared by every producer. Memoised rather than
@@ -77,12 +98,25 @@ export function analyseBody(parts, { headers = [], bodyOnly = false } = {}) {
   return findings;
 }
 
-function bodyOnlyNotice() {
+/**
+ * The notice a body-only paste leads with.
+ *
+ * `bodyWasRead` is not decoration. The sentence promising that the content is
+ * read below is false whenever no part survived to be read — under
+ * `--headers-only`, or when parseParts degraded to nothing — and it was
+ * printed unconditionally, so the one card on screen announced a reading that
+ * never happened and then ended.
+ */
+function bodyOnlyNotice(bodyWasRead) {
+  const missing = 'Nothing above the content parsed as a header block, so the questions a header answers — who sent this, to whom, whether its authentication held, which route it took — cannot be answered here.';
+  const rest = bodyWasRead
+    ? ' What the body itself says is read below.'
+    : ' The body was not read either, so nothing below describes it.';
   return {
     id: 'body-only',
     title: 'A message body without its header',
     tone: 'info',
-    lede: 'Nothing above the content parsed as a header block, so the questions a header answers — who sent this, to whom, whether its authentication held, which route it took — cannot be answered here. What the body itself says is read below. For the whole picture, paste the full "Show Original" / "View Source" output, header included.',
+    lede: `${missing}${rest} For the whole picture, paste the full "Show Original" / "View Source" output, header included.`,
     items: [{
       label: 'Missing with the header',
       value: 'Sender, recipients, authentication verdicts, tracking identifiers, the delivery route — every finding that needs a header field.',
@@ -115,6 +149,7 @@ function linkFinding(parts, scanOf) {
       base ??= scan.base;
       if (scan.truncated) scannerTruncated = true;
       for (const link of scan.links) collected.push({ href: link.href, text: link.text });
+      for (const url of autolinkedUrls(scan)) collected.push({ href: url, text: '' });
       for (const form of scan.forms) formActions.push(form.action);
     } else if (part.contentType.startsWith('text/')) {
       for (const url of extractUrls(part.text)) collected.push({ href: url, text: '' });
@@ -368,6 +403,7 @@ function trackingFinding(parts, scanOf, headers) {
       const scan = scanOf(part);
       images.push(...scan.images);
       for (const link of scan.links) urls.push(String(link.href ?? ''));
+      urls.push(...autolinkedUrls(scan));
       for (const image of scan.images) urls.push(String(image.src ?? ''));
       for (const form of scan.forms) urls.push(String(form.action ?? ''));
     } else if (part.contentType.startsWith('text/')) {
@@ -666,25 +702,32 @@ function attachmentFinding(parts) {
     }
 
     // The first bytes against the declared type — the one look inside this
-    // card takes, and the only one.
+    // card takes, and the only one. Every sentence here says "declared", so
+    // every one of them reads the declaration: `contentType` is how the part
+    // was read, and where content outranked the declaration the two differ. A
+    // `.txt` attachment holding markup is read as text/html, and this card
+    // reported "Declared as text/html" over a part that declared text/plain —
+    // a false claim about the message, in the one card whose whole subject is
+    // what a part says about itself versus what it is.
+    const stated = part.declaredType ?? part.contentType;
     const actual = magicOf(part.head);
-    const expected = DECLARED_MAGIC.find(([re]) => re.test(part.contentType))?.[1];
-    if (actual && /program/.test(actual) && !/octet-stream/.test(part.contentType)) {
+    const expected = DECLARED_MAGIC.find(([re]) => re.test(stated))?.[1];
+    if (actual && /program/.test(actual) && !/octet-stream/.test(stated)) {
       tells.push({
         level: 'bad',
-        note: `Declared as ${part.contentType}, but its first bytes are those of ${actual}. Whatever the name and type say, this is code.`,
+        note: `Declared as ${stated}, but its first bytes are those of ${actual}. Whatever the name and type say, this is code.`,
       });
     } else if (expected && actual && expected !== actual) {
       tells.push({
         level: 'caution',
-        note: `Declared as ${part.contentType}, but its first bytes are those of ${actual}, not ${expected}. The type a mail client shows is the declared one; the type that matters is what the bytes are.`,
+        note: `Declared as ${stated}, but its first bytes are those of ${actual}, not ${expected}. The type a mail client shows is the declared one; the type that matters is what the bytes are.`,
       });
     }
 
     const worst = tells.find((tell) => tell.level === 'bad') ?? tells[0];
     items.push({
       label: name,
-      value: `Declared as ${part.contentType}, ${size}.${part.clipped ? ' Larger than what was read.' : ''}`,
+      value: `Declared as ${stated}, ${size}.${part.clipped ? ' Larger than what was read.' : ''}`,
       mono: true,
       level: worst?.level ?? null,
       emphasis: worst?.level === 'bad',
@@ -712,8 +755,14 @@ function attachmentFinding(parts) {
  * destination, and only genuinely absent ones diverge.
  */
 function divergenceFinding(parts, scanOf) {
-  const plainParts = parts.filter((part) => part.contentType === 'text/plain' && part.text);
-  const htmlParts = parts.filter((part) => part.contentType === 'text/html' && part.text);
+  // Paired by what the message offered each part as, not by how it ended up
+  // being read. A text/plain part that mentions a `<table>` in prose is read
+  // as markup — correctly, since that is how its hrefs would be found — and
+  // pairing on the reading then left the message with no plain version at all,
+  // so this card silently stopped comparing.
+  const offeredAs = (part) => part.declaredType ?? part.contentType;
+  const plainParts = parts.filter((part) => offeredAs(part) === 'text/plain' && part.text);
+  const htmlParts = parts.filter((part) => offeredAs(part) === 'text/html' && part.text);
   if (!plainParts.length || !htmlParts.length) return null;
 
   const destination = (url) => {
@@ -735,9 +784,17 @@ function divergenceFinding(parts, scanOf) {
     return party(parsed.hostname);
   };
 
+  // Every place a part can send a reader, however that part is read — so the
+  // two sides are compared on the same terms.
+  const reachableFrom = (part) => {
+    if (part.contentType !== 'text/html') return extractUrls(part.text);
+    const scan = scanOf(part);
+    return [...scan.links.map((link) => String(link.href ?? '').trim()), ...autolinkedUrls(scan)];
+  };
+
   const plainTargets = new Set();
   for (const part of plainParts) {
-    for (const url of extractUrls(part.text)) {
+    for (const url of reachableFrom(part)) {
       const target = destination(url);
       if (target) plainTargets.add(target);
     }
@@ -745,8 +802,8 @@ function divergenceFinding(parts, scanOf) {
 
   const htmlOnly = new Set();
   for (const part of htmlParts) {
-    for (const link of scanOf(part).links) {
-      const target = destination(String(link.href ?? '').trim());
+    for (const url of reachableFrom(part)) {
+      const target = destination(url);
       if (target && !plainTargets.has(target)) htmlOnly.add(target);
     }
   }

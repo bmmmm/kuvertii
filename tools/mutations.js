@@ -572,6 +572,23 @@ function el(tag, className, text) {
   },
 
   {
+    id: 'angle-brackets-swallow-the-tag',
+    promise: 'A markup tag never swallows the URL inside it.',
+    file: 'js/links.js',
+    find: `    /<((?:https?:\\/\\/|mailto:)[^\\s>]+)>|(https?:\\/\\/[^\\s<>"']+)|(mailto:[^\\s<>"',]+)/gi,`,
+    replace: `    /<([^>]+)>|(https?:\\/\\/[^\\s<>"']+)|(mailto:[^\\s<>"',]+)/gi,`,
+    mustKill: [
+      'a markup tag does not swallow the url inside it',
+      'an image source inside a tag is found too',
+    ],
+    // Round 7. The angle-bracket branch is there to unwrap <https://…>; it
+    // accepted anything between the brackets and then discarded whatever did
+    // not begin with a scheme, so `<a href="…">` was consumed whole and the
+    // destination went with the tag. In any body read as plain text the href
+    // was deleted and the link text survived.
+  },
+
+  {
     id: 'serve-public-bind',
     promise: 'The dev server listens on loopback only.',
     file: 'tools/serve.mjs',
@@ -858,6 +875,74 @@ function el(tag, className, text) {
   },
 
   {
+    id: 'inventory-prints-the-reading',
+    promise: 'A row that says "declared" reads the declaration, not the reading.',
+    file: 'js/body.js',
+    find: `    const stated = part.declaredType ?? part.contentType;`,
+    replace: `    const stated = part.contentType;`,
+    mustKill: ['the inventory names the type the part declared, not the one it was read as'],
+    // Round 7, self-inflicted. Once content outranks the declaration, a .txt
+    // attachment holding markup is read as text/html — and this card said
+    // "Declared as text/html" over a part that declared text/plain, in the one
+    // card whose subject is precisely that difference.
+  },
+
+  {
+    id: 'autolinked-url-unread',
+    promise: 'A URL a mail client would turn into a link is a destination like any other.',
+    file: 'js/body.js',
+    find: `      for (const url of autolinkedUrls(scan)) collected.push({ href: url, text: '' });`,
+    replace: '',
+    mustKill: ['a url written into the visible text of an html part is a destination'],
+    // Round 7. Only hrefs and form actions were read out of an HTML part, so a
+    // message whose one destination was typed into a paragraph — which every
+    // client autolinks, and which much ordinary bulk mail does — produced no
+    // link card whatever. The real binary said nothing at all about
+    // tracker.evil.example.
+  },
+
+  {
+    id: 'link-text-counted-as-destination',
+    promise: 'A link\'s own text is a claim about it, never a place the message goes.',
+    file: 'js/body.js',
+    find: `  const claimed = new Set(scan.links.flatMap((link) => extractUrls(link.text)));
+  return extractUrls(scan.text).filter((url) => !claimed.has(url));`,
+    replace: `  return extractUrls(scan.text);`,
+    mustKill: ['a link\'s own text is a claim, never counted as a place the message goes'],
+    // The other half of the entry above: reading the visible text for
+    // destinations puts the decoy back on the card as somewhere the reader can
+    // land, which is the one thing the mismatch rule exists to prevent.
+  },
+
+  {
+    id: 'divergence-pairs-on-the-reading',
+    promise: 'The two versions are paired by what the message offered, not by how each was read.',
+    file: 'js/body.js',
+    find: `  const offeredAs = (part) => part.declaredType ?? part.contentType;`,
+    replace: `  const offeredAs = (part) => part.contentType;`,
+    mustKill: ['a plain version that mentions a tag is still the plain version'],
+    // Round 7, self-inflicted and found by probing the fix rather than the
+    // bug: once content outranks the declaration, a text/plain part that
+    // mentions a <table> in prose is read as markup — correctly — and pairing
+    // on the reading then left the message with no plain side, so the card
+    // silently stopped comparing.
+  },
+
+  {
+    id: 'body-only-notice-promises-a-reading',
+    promise: 'The body-only notice never promises a reading that did not happen.',
+    file: 'js/body.js',
+    find: `  const rest = bodyWasRead
+    ? ' What the body itself says is read below.'
+    : ' The body was not read either, so nothing below describes it.';`,
+    replace: `  const rest = ' What the body itself says is read below.';`,
+    mustKill: ['the notice does not promise a reading that did not happen'],
+    // Round 7, found by running the real binary: `kuvertii --headers-only`
+    // over a body-only paste printed one card announcing that the body was
+    // read below, and then the report ended.
+  },
+
+  {
     id: 'body-form-quiet',
     promise: 'A form inside a mail body is always a warning row.',
     file: 'js/body.js',
@@ -870,9 +955,7 @@ function el(tag, className, text) {
     id: 'undeclared-markup-read-as-plain',
     promise: 'A body that is visibly markup is judged by its hrefs, never by its decoy text.',
     file: 'js/mime.js',
-    find: `  const contentType = !declared.trim() && MARKUP_RE.test(body)
-    ? parseContentType('text/html')
-    : parseContentType(declared);`,
+    find: `  const contentType = typeForContent(declared, body);`,
     replace: `  const contentType = parseContentType(declared);`,
     mustKill: [
       'an undeclared body that is visibly markup is read as HTML',
@@ -882,6 +965,90 @@ function el(tag, className, text) {
     // with no Content-Type the HTML was read as plain text, the hrefs
     // vanished inside their angle brackets, and the card tallied "dhl.de —
     // 1 link" for a link that went to a bare IP.
+  },
+
+  {
+    id: 'absent-size-reads-as-zero',
+    promise: 'A size nobody stated is unstated, never a stated zero.',
+    file: 'js/mime.js',
+    find: `  const declared = parameter(raw, 'size');
+  const size = declared === null ? null : Number(declared);`,
+    replace: `  const size = Number(parameter(raw, 'size'));`,
+    mustKill: [
+      'an attachment with no size= is measured, not called zero bytes',
+      'a size= that is not a size is no size at all',
+    ],
+    // Round 7, and older than the body path. `size=` is optional and most
+    // mailers never write it; `Number(null)` is 0, which passed the
+    // safe-integer check as a stated size of zero, so bytesDeclared never fell
+    // through to the decoded length. The real binary printed "Declared as
+    // application/pdf, 0 bytes." over an ordinary invoice. It survived five
+    // audit rounds because the fixture beside it states size=90210.
+  },
+
+  {
+    id: 'tally-with-nothing-to-count',
+    promise: 'The closing tally can say that nothing was read.',
+    file: 'js/mime.js',
+    find: '  return read ? `${read} read.` : \'Nothing was read.\';',
+    replace: '  return `${read} read.`;',
+    mustKill: ['a tally with nothing to count says so, rather than opening with a blank'],
+    // Round 7. Built by joining the non-zero counts, the line printed a bare
+    // " read." with no subject whenever both were zero — on the command line
+    // with --headers-only over a body-only paste, and on the page when
+    // parseParts degrades to no parts. The one sentence whose job is a
+    // complete account of the input could not say the input had not been read.
+  },
+
+  {
+    id: 'declaration-outranks-content',
+    promise: 'A body that is visibly markup is read as markup whatever it declares.',
+    file: 'js/mime.js',
+    find: `  const openToReading = !String(declared ?? '').trim() || parsed.type.startsWith('text/');`,
+    replace: `  const openToReading = !String(declared ?? '').trim();`,
+    mustKill: [
+      'a declared text/plain over markup is read as markup all the same',
+    ],
+    // Round 7. The rule above held only where nothing was declared — and the
+    // declaration is written by the party that gains from the misreading. One
+    // `Content-Type: text/plain` over an HTML body put it back on the plain
+    // path, where the href vanished inside its tag: the real binary printed
+    // paypal.com as the destination of a link going to tracker.evil.example
+    // and never named that host anywhere.
+  },
+
+  {
+    id: 'lost-boundary-swallows-the-body',
+    promise: 'A multipart whose parts cannot be told apart keeps its content, and says so.',
+    file: 'js/mime.js',
+    find: `      state.unreadableStructure = true;
+      leaf(typeForContent('', body), encoding, disposition, body, parts, state, {});`,
+    replace: `      leaf(contentType, encoding, disposition, body, parts, state, { opaque: true });`,
+    mustKill: [
+      'a boundary that never appears keeps the content and announces itself',
+      'a lost boundary does not hide the links underneath it',
+      'a multipart with no boundary parameter is read as one part, and says so',
+    ],
+    // Round 7, and the cheapest attack the body path had. A `boundary=` the
+    // sender never uses cost one header line and emptied the entire body
+    // report: the content was kept as an opaque part, every producer skips a
+    // part with no text, and the tally still read "1 body part read". A
+    // lookalike link and a tracking pixel drew no card at all. The other three
+    // unreadable outcomes here — too deep, too many parts, too large — all
+    // announced themselves; this was the only one that did not, and the only
+    // one the sender could trigger for free.
+  },
+
+  {
+    id: 'unreadable-structure-unannounced',
+    promise: 'A structure that could not be followed is said out loud, not merely worked around.',
+    file: 'js/mime.js',
+    find: `  if (state.unreadableStructure) {`,
+    replace: `  if (false) {`,
+    mustKill: [
+      'a boundary that never appears keeps the content and announces itself',
+      'a multipart with no boundary parameter is read as one part, and says so',
+    ],
   },
 
   {

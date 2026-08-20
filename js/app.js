@@ -7,7 +7,7 @@ import { analyseBody } from './body.js';
 import { neutralise } from './control.js';
 import { hashedAddressRows } from './emailhash.js';
 import { analyse } from './findings.js';
-import { parseParts, splitMessage } from './mime.js';
+import { parseParts, readTally, splitMessage } from './mime.js';
 import { clippedNote, MAX_HEADER_BYTES, readHeaders } from './unfold.js';
 
 const input = document.querySelector('#header-input');
@@ -156,11 +156,7 @@ function run() {
 
   // The status line is a complete account of what was read — headers, body
   // parts, and every ceiling that bit along the way.
-  const read = [
-    headers.length ? `${headers.length} header field${headers.length === 1 ? '' : 's'}` : null,
-    parts.length ? `${parts.length} body part${parts.length === 1 ? '' : 's'}` : null,
-  ].filter(Boolean).join(' and ');
-  status.textContent = `${read} read.${notes.join('')} Nothing left this page.${clipped}`;
+  status.textContent = `${readTally(headers.length, parts.length)}${notes.join('')} Nothing left this page.${clipped}`;
 
   for (const finding of findings) {
     const { card, list } = renderFinding(finding);

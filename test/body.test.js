@@ -36,6 +36,28 @@ test('text claiming one domain over a link to another is the top finding', () =>
   assert.equal(card.tone, 'alert');
 });
 
+// ------------------------------------------- urls a client turns into links
+
+test('a url written into the visible text of an HTML part is a destination', () => {
+  // Only hrefs and form actions were read, so a message whose one destination
+  // was typed out in a paragraph — which every client autolinks, and which a
+  // great deal of ordinary bulk mail does — produced no link card at all. The
+  // real binary printed nothing whatever about tracker.evil.example.
+  const card = linkCard(htmlPart('<p>Restore it here:</p><p>https://tracker.evil.example/click?u=abc</p>'));
+  assert.ok(card, 'the card exists at all');
+  assert.match(flat(card), /evil\.example/);
+});
+
+test('a link\'s own text is a claim, never counted as a place the message goes', () => {
+  // The other half of the rule above: the anchor text is what the link says
+  // about itself, judged against the href by the mismatch check. Collecting it
+  // as a destination too would put the decoy back on the card as somewhere the
+  // reader can actually land.
+  const card = linkCard(htmlPart('<a href="https://evil.example/login">https://www.paypal.com/security</a>'));
+  const destinations = card.items.filter((i) => /^\d+ links?/.test(String(i.value))).map((i) => i.label);
+  assert.deepEqual(destinations, ['evil.example']);
+});
+
 test('a bare familiar domain in the text is a claim too', () => {
   const card = linkCard(htmlPart('<a href="https://evil.example/x">Visit paypal.com for details</a>'));
   assert.ok(card.items.some((i) => i.level === 'bad' && /paypal\.com/.test(i.label)));
@@ -185,7 +207,20 @@ test('a body-only paste leads with the honest notice', () => {
   const findings = analyseBody(plainPart('https://news.example/x'), { bodyOnly: true });
   assert.equal(findings[0].id, 'body-only');
   assert.match(findings[0].lede, /cannot be answered here/);
+  assert.match(findings[0].lede, /is read below/);
   assert.ok(findings.some((f) => f.id === 'body-links'));
+});
+
+test('the notice does not promise a reading that did not happen', () => {
+  // "What the body itself says is read below" was printed unconditionally.
+  // Under --headers-only there is no body part, and when parseParts degrades
+  // there is none either — so the one card on screen announced a reading, and
+  // then the report ended. Found by running the real binary:
+  // `kuvertii --headers-only` over a body-only paste.
+  const findings = analyseBody([], { bodyOnly: true });
+  assert.equal(findings.length, 1, 'the notice is all there is');
+  assert.doesNotMatch(findings[0].lede, /is read below/);
+  assert.match(findings[0].lede, /nothing below describes it/);
 });
 
 test('a fault in the body costs the body sections, each reported by its own guard', () => {
@@ -435,6 +470,23 @@ test('a declared PDF that begins like a PNG is a mismatch, stated as one', () =>
   assert.match(row.note, /those of a PNG image, not a PDF/);
 });
 
+test('the inventory names the type the part declared, not the one it was read as', () => {
+  // Every sentence in this card says "declared", so every one of them has to
+  // read the declaration. A .txt attachment holding markup is read as
+  // text/html — correctly, that is how its hrefs are found — and the row said
+  // "Declared as text/html" over a part that declared text/plain: a false
+  // claim about the message, in the one card whose whole subject is what a
+  // part says about itself against what its bytes are.
+  const card = attachmentCard(attachment({
+    contentType: 'text/html',
+    declaredType: 'text/plain',
+    filename: 'invoice.txt',
+    head: [0x3c, 0x68, 0x74, 0x6d],
+  }));
+  assert.match(card.items[0].value, /Declared as text\/plain/);
+  assert.doesNotMatch(card.items[0].value, /text\/html/);
+});
+
 test('unknown first bytes accuse nobody', () => {
   const card = attachmentCard(attachment({ head: [0x01, 0x02, 0x03, 0x04] }));
   assert.equal(card.items[0].level, null);
@@ -494,6 +546,40 @@ test('a decodable redirect counts as where it lands, not where it hops', () => {
     'Read: https://news.example/story',
     `<a href="https://click.tracker.example/V${destination}">story</a>`,
   )), undefined, 'the tracked link and its plain twin are one destination');
+});
+
+test('a plain version that mentions a tag is still the plain version', () => {
+  // Self-inflicted, and found by probing the fix rather than the bug: once a
+  // body that is visibly markup is read as markup whatever it declares, a
+  // text/plain part discussing a `<table>` in prose becomes a text/html part —
+  // and pairing the two versions on how they are read then left this message
+  // with no plain side at all, so the card silently stopped comparing. It
+  // pairs on what each part was offered as.
+  const { headerText, bodyText } = splitMessage([
+    'From: news@shop.example',
+    'Content-Type: multipart/alternative; boundary="BB"',
+    '',
+    '--BB',
+    'Content-Type: text/plain; charset="utf-8"',
+    '',
+    'Our new template uses a <table> layout now.',
+    'Read it at https://shop.example/news',
+    '',
+    '--BB',
+    'Content-Type: text/html; charset="utf-8"',
+    '',
+    '<p>Our template</p><a href="https://shop.example/news">Read</a>'
+      + '<a href="https://tracker.adnetwork.example/c?u=9">More</a>',
+    '--BB--',
+  ].join('\n'));
+  const { parts } = parseParts(parseHeaders(headerText), bodyText);
+  assert.equal(parts[0].contentType, 'text/html', 'read as markup, because that is what it is');
+  assert.equal(parts[0].declaredType, 'text/plain', 'but still offered as the plain version');
+
+  const card = analyseBody(parts).find((f) => f.id === 'divergence');
+  assert.ok(card, 'the comparison still happens');
+  assert.match(card.items[0].value, /adnetwork\.example/);
+  assert.doesNotMatch(card.items[0].value, /shop\.example/, 'the shared destination is not html-only');
 });
 
 test('with only one version present there is nothing to compare', () => {

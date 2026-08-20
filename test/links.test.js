@@ -28,6 +28,32 @@ test('urls are pulled out of angle-bracketed header values', () => {
   assert.deepEqual(urls, ['https://a.example/unsub', 'mailto:off@a.example']);
 });
 
+test('a markup tag does not swallow the url inside it', () => {
+  // The angle-bracket branch is there to unwrap <https://…>. It used to accept
+  // anything between the brackets and drop whatever did not start with a
+  // scheme, so it consumed `<a href="…">` whole and took the destination with
+  // it. In any body read as plain text that deleted the href and left the link
+  // text standing, and the report named the domain the message claimed rather
+  // than the one it went to.
+  const urls = extractUrls('<a href="https://tracker.evil.example/c">https://www.paypal.com/signin</a>');
+  assert.ok(
+    urls.includes('https://tracker.evil.example/c'),
+    'the destination survives the tag around it',
+  );
+  assert.ok(urls.includes('https://www.paypal.com/signin'), 'and the visible one is still found');
+});
+
+test('an image source inside a tag is found too', () => {
+  const urls = extractUrls('<img src="https://pixel.example.org/o.gif?id=9" width="1">');
+  assert.deepEqual(urls, ['https://pixel.example.org/o.gif?id=9']);
+});
+
+test('an angle-bracketed url with a space is still read up to the space', () => {
+  // The wrapper no longer matches here — there is no closing bracket after an
+  // unbroken run — so the plain branch has to find it instead.
+  assert.deepEqual(extractUrls('<https://a.example/x y>'), ['https://a.example/x']);
+});
+
 test('a plausible unsubscribe link reads as plausible', () => {
   const report = inspectUnsubscribeLink(CLICK_URL, {
     fromDomain: 'mail.example.email',

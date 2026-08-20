@@ -17,7 +17,7 @@ import { clearClipboard, readClipboard } from '../js/clipboard.js';
 import { hashedAddressRows } from '../js/emailhash.js';
 import { analyse } from '../js/findings.js';
 import { createKeyReader, isQuit, untilQuit } from '../js/keys.js';
-import { parseParts, splitMessage } from '../js/mime.js';
+import { parseParts, readTally, splitMessage } from '../js/mime.js';
 import { createRenderer } from '../js/terminal.js';
 import { clippedNote, MAX_HEADER_BYTES, readHeaders } from '../js/unfold.js';
 
@@ -145,12 +145,9 @@ async function report(text, renderer, out = process.stdout, { headersOnly = fals
 
   // The tally is a complete account of what was read — and, under
   // --headers-only, of what deliberately was not.
-  const read = [
-    headers.length ? `${headers.length} header field${headers.length === 1 ? '' : 's'}` : null,
-    parts.length ? `${parts.length} body part${parts.length === 1 ? '' : 's'}` : null,
-  ].filter(Boolean).join(' and ');
+  const read = readTally(headers.length, parts.length);
   const bodySkipped = headersOnly && /\S/.test(bodyText) ? ' The body was not read, as asked.' : '';
-  out.write(`\n${renderer.paint('\x1b[2m', `${read} read.${bodySkipped}${notes.join('')}${clipped} Nothing left this machine.`)}\n`);
+  out.write(`\n${renderer.paint('\x1b[2m', `${read}${bodySkipped}${notes.join('')}${clipped} Nothing left this machine.`)}\n`);
   return true;
 }
 

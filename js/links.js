@@ -106,9 +106,23 @@ export function registrableDomain(host) {
   return labels.slice(labels.length - suffix - 1).join('.');
 }
 
-/** Pull every http(s) and mailto URL out of a string. */
+/**
+ * Pull every http(s) and mailto URL out of a string.
+ *
+ * The angle-bracket branch is there to unwrap `<https://example.com>`, the
+ * RFC 3986 §appendix-C form mail still uses. It used to accept anything
+ * between the brackets and then discard whatever did not start with a scheme —
+ * which meant it consumed `<a href="https://tracker.example/…">` whole and
+ * threw the destination away with the tag. A body read as plain text lost
+ * every href that way and kept the link text, so the report named the domain
+ * the message *claimed* and never the one it went to. It now unwraps only what
+ * it says it unwraps; anything else is left for the plain URL branch to find
+ * inside.
+ */
 export function extractUrls(text) {
-  const matches = String(text ?? '').match(/<([^>]+)>|(https?:\/\/[^\s<>"']+)|(mailto:[^\s<>"',]+)/gi) ?? [];
+  const matches = String(text ?? '').match(
+    /<((?:https?:\/\/|mailto:)[^\s>]+)>|(https?:\/\/[^\s<>"']+)|(mailto:[^\s<>"',]+)/gi,
+  ) ?? [];
   return [...new Set(
     matches
       .map((m) => m.replace(/^<|>$/g, '').trim())

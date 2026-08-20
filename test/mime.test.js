@@ -10,7 +10,7 @@ import { test } from 'node:test';
 
 import {
   bodyClippedNote, looksLikeHeaderBlock, MAX_BODY_BYTES, MAX_DEPTH, MAX_PARTS,
-  MAX_PART_TEXT, parseParts, splitMessage,
+  MAX_PART_TEXT, parseParts, readTally, splitMessage,
 } from '../js/mime.js';
 import { parseHeaders } from '../js/unfold.js';
 
@@ -208,6 +208,57 @@ test('an attachment is described, its content never decoded past the head', () =
   assert.equal(String.fromCharCode(...got[0].head.slice(0, 5)), '%PDF-');
 });
 
+test('an attachment with no size= is measured, not called zero bytes', () => {
+  // The fixture above states `size=90210`, and that is the whole reason this
+  // survived five audit rounds: `size=` is optional and most mailers never
+  // write it. `Number(null)` is 0, which passed the safe-integer check as a
+  // stated size of zero, so `bytesDeclared` never fell through to the decoded
+  // length — and the real binary printed "Declared as application/pdf, 0
+  // bytes." over an ordinary invoice.
+  const payload = Buffer.from('%PDF-1.7 and a hundred more bytes of it').toString('base64');
+  const body = [
+    '--BB',
+    'Content-Type: application/pdf; name="rechnung.pdf"',
+    'Content-Transfer-Encoding: base64',
+    'Content-Disposition: attachment; filename="rechnung.pdf"',
+    '',
+    payload,
+    '--BB--',
+  ].join('\n');
+  const { parts: got } = parts(['Content-Type: multipart/mixed; boundary=BB'], body);
+  assert.ok(got[0].bytesDeclared > 30, `measured, not zero — got ${got[0].bytesDeclared}`);
+});
+
+test('a size= that is not a size is no size at all', () => {
+  const body = [
+    '--BB',
+    'Content-Type: application/pdf',
+    'Content-Disposition: attachment; filename="x.pdf"; size=lots',
+    '',
+    'content',
+    '--BB--',
+  ].join('\n');
+  const { parts: got } = parts(['Content-Type: multipart/mixed; boundary=BB'], body);
+  assert.equal(got[0].bytesDeclared, 'content'.length, 'falls back to what was actually there');
+});
+
+test('a text attachment holding markup still declares what it declared', () => {
+  // Read as markup, because that is how its hrefs are found — but the
+  // attachment card says "Declared as …" about every part it lists, and the
+  // declaration is a different fact from the reading.
+  const body = [
+    '--BB',
+    'Content-Type: text/plain; charset="utf-8"; name="invoice.txt"',
+    'Content-Disposition: attachment; filename="invoice.txt"',
+    '',
+    '<html><body><a href="https://collect.evil.example/x">pay now</a></body></html>',
+    '--BB--',
+  ].join('\n');
+  const { parts: got } = parts(['Content-Type: multipart/mixed; boundary=BB'], body);
+  assert.equal(got[0].contentType, 'text/html', 'read for what it is');
+  assert.equal(got[0].declaredType, 'text/plain', 'described as what it claimed');
+});
+
 test('an RFC 2047 filename is decoded into something legible', () => {
   const encoded = `=?utf-8?B?${Buffer.from('Größenwahn.exe', 'utf8').toString('base64')}?=`;
   const body = [
@@ -319,20 +370,47 @@ test('a single part past the per-part ceiling is clipped and flagged', () => {
 
 // ----------------------------------------------------------------- malformed
 
-test('multipart with no boundary parameter degrades to one opaque part', () => {
-  const { parts: got } = parts(['Content-Type: multipart/mixed'], 'unstructured content');
+// A multipart whose parts cannot be told apart used to be kept as one opaque
+// part: counted in the tally, its content discarded, and nothing said. Every
+// producer skips a part with no text, so one `boundary=` the sender never used
+// emptied the whole body report while the tally still read "1 body part read".
+// The content is read for what it looks like now, and the structure that could
+// not be followed is announced — the way the other three unreadable outcomes
+// here already were.
+
+test('a multipart with no boundary parameter is read as one part, and says so', () => {
+  const { parts: got, notes } = parts(['Content-Type: multipart/mixed'], 'unstructured content');
   assert.equal(got.length, 1);
-  assert.equal(got[0].contentType, 'multipart/mixed');
-  assert.equal(got[0].text, null);
+  assert.match(got[0].text, /unstructured content/);
+  assert.match(notes.join(''), /boundary that never appears/);
 });
 
-test('a boundary that never appears degrades the same way', () => {
-  const { parts: got } = parts(
+test('a boundary that never appears keeps the content and announces itself', () => {
+  const { parts: got, notes } = parts(
     ['Content-Type: multipart/mixed; boundary=NEVER'],
     'no delimiter anywhere in here',
   );
   assert.equal(got.length, 1);
-  assert.equal(got[0].text, null);
+  assert.match(got[0].text, /no delimiter anywhere in here/);
+  assert.match(notes.join(''), /could not be told apart/);
+});
+
+test('a lost boundary does not hide the links underneath it', () => {
+  const body = '<html><body><a href="https://tracker.evil.example/c">https://www.paypal.com/signin</a></body></html>';
+  const { parts: got, notes } = parts(
+    ['Content-Type: multipart/alternative; boundary="NEVER-APPEARS"'],
+    body,
+  );
+  assert.equal(got.length, 1);
+  assert.equal(got[0].contentType, 'text/html', 'read for what it looks like, not for what was declared');
+  assert.match(got[0].text, /tracker\.evil\.example/);
+  assert.ok(notes.join('').length, 'and the structure that could not be followed is announced');
+});
+
+test('a well-formed multipart earns no unreadable-structure note', () => {
+  const body = ['--BB', 'Content-Type: text/plain', '', 'ordinary', '--BB--'].join('\n');
+  const { notes } = parts(['Content-Type: multipart/mixed; boundary=BB'], body);
+  assert.equal(notes.join(''), '', 'the note is earned, not printed over every message');
 });
 
 test('a missing closing delimiter keeps the final part', () => {
@@ -351,8 +429,8 @@ test('a child that reuses its parent boundary cannot recurse', () => {
     '--BB--',
   ].join('\n');
   const { parts: got } = parts(['Content-Type: multipart/mixed; boundary=BB'], body);
-  assert.equal(got.length, 1);
-  assert.equal(got[0].text, null, 'the child multipart is opaque, not misparsed');
+  assert.equal(got.length, 1, 'one part — the child does not recurse into the parent split');
+  assert.match(got[0].text, /swallowed by the parent split/, 'and its content is not thrown away');
 });
 
 test('a boundary full of regex metacharacters is matched as a string', () => {
@@ -415,6 +493,42 @@ test('an undeclared body that is visibly markup is read as HTML', () => {
 test('an undeclared body of plain prose stays plain text', () => {
   const { parts: got } = parseParts([], 'no markup here, just words and https://a.example/x');
   assert.equal(got[0].contentType, 'text/plain');
+});
+
+test('a declared text/plain over markup is read as markup all the same', () => {
+  // The rule above held only where nothing was declared, and the declaration
+  // is written by the party that profits from the misreading. One
+  // `Content-Type: text/plain` line put an HTML body back on the plain path,
+  // where the href vanished inside its tag and the anchor text survived — the
+  // real binary then printed paypal.com as the destination of a link going to
+  // tracker.evil.example, and never named that host at all.
+  const body = '<html><body><a href="https://tracker.evil.example/c">https://www.paypal.com/signin</a></body></html>';
+  const { parts: got } = parseParts(parseHeaders('Content-Type: text/plain; charset=utf-8'), body);
+  assert.equal(got[0].contentType, 'text/html');
+  assert.equal(got[0].charset, 'utf-8', 'only the reading changes; the declared parameters are kept');
+});
+
+test('a part that says it is not text is taken at its word', () => {
+  // The rule reaches text/* and undeclared bodies only. A PDF or an image is
+  // read for its first bytes, not its text, and a hex string inside one is not
+  // a <p> tag — second-guessing those would decode attachments as prose.
+  const body = '%PDF-1.4 <a href="https://x.example/">catalogue</a>';
+  const { parts: got } = parseParts(parseHeaders('Content-Type: application/pdf'), body);
+  assert.equal(got[0].contentType, 'application/pdf');
+});
+
+// ---------------------------------------------------------------- the tally
+
+test('a tally with nothing to count says so, rather than opening with a blank', () => {
+  // Built by joining the non-zero counts, it produced a bare " read." with no
+  // subject whenever both were zero — reachable on the command line with
+  // --headers-only over a body-only paste, and on the page when parseParts
+  // degrades to no parts. The one line whose job is a complete account of the
+  // input could not say the input had not been read.
+  assert.equal(readTally(0, 0), 'Nothing was read.');
+  assert.equal(readTally(1, 0), '1 header field read.');
+  assert.equal(readTally(4, 1), '4 header fields and 1 body part read.');
+  assert.equal(readTally(4, 2), '4 header fields and 2 body parts read.');
 });
 
 // -------------------------------------------------------------------- timing
