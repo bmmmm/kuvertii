@@ -45,14 +45,16 @@ const IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
  * strength of its path. The brackets are what make it unambiguous — a
  * registrable domain can never contain them.
  */
-function isAddressLiteral(hostname) {
+export function isAddressLiteral(hostname) {
   return IPV4_RE.test(hostname) || hostname.startsWith('[');
 }
 
 // Paths a genuine unsubscribe endpoint tends to use.
 const UNSUB_PATH_RE = /(unsub|unsubscribe|optout|opt-out|remove|preferences|subscription|abmeld)/i;
-// Paths that have no business being behind an unsubscribe link.
-const CREDENTIAL_PATH_RE = /(login|signin|sign-in|verify|validate|confirm-?account|password|secure|billing|payment|invoice|wallet|update-?info)/i;
+// Paths that have no business being behind an unsubscribe link — and, since
+// the body path exists, no more business behind a "view your invoice" button.
+// Exported for js/body.js, which runs the same test over every body link.
+export const CREDENTIAL_PATH_RE = /(login|signin|sign-in|verify|validate|confirm-?account|password|secure|billing|payment|invoice|wallet|update-?info)/i;
 
 /**
  * How many trailing labels of `labels` form the public suffix.

@@ -635,8 +635,8 @@ function el(tag, className, text) {
     id: 'cli-clips-in-silence',
     promise: 'The command announces the cut in the same breath as the tally.',
     file: 'bin/kuvertii.js',
-    find: '${skippedNote(skipped)}${clipped} Nothing left this machine.',
-    replace: '${skippedNote(skipped)} Nothing left this machine.',
+    find: '${bodySkipped}${notes.join(\'\')}${clipped} Nothing left this machine.',
+    replace: '${bodySkipped}${notes.join(\'\')} Nothing left this machine.',
     mustKill: ['input cut at the ceiling is announced, not silently tallied'],
     // The original. The page carried the note and the command did not — two
     // copies of one claim, one of them lost. The wording now lives in
@@ -775,5 +775,113 @@ function el(tag, className, text) {
     // Without the branch, `192.0.2.7` makes three probes — one of them asking
     // whether `0.2.7` is a phishing domain — and the printed false-alarm odds
     // are computed for questions that were never worth asking.
+  },
+
+  // ------------------------------------------------------------ the body path
+  {
+    id: 'mime-depth-unbounded',
+    promise: 'MIME nesting past the ceiling is kept unopened, and the report says so.',
+    file: 'js/mime.js',
+    find: `    if (depth >= MAX_DEPTH) {`,
+    replace: `    if (false) {`,
+    mustKill: ['nesting past the depth ceiling is kept unopened, and says so'],
+    // The sender writes the nesting. Without the ceiling a boundary bomb
+    // recurses as deep as its author cared to type, on the browser's main
+    // thread, with the reader watching a frozen tab.
+  },
+
+  {
+    id: 'mime-part-count-unbounded',
+    promise: 'Parts past the ceiling are counted out loud, never silently dropped or endlessly read.',
+    file: 'js/mime.js',
+    find: `  if (parts.length >= MAX_PARTS) {`,
+    replace: `  if (false) {`,
+    mustKill: ['more parts than the ceiling are counted, not silently dropped'],
+  },
+
+  {
+    id: 'body-clip-silent',
+    promise: 'A body cut at the ceiling is announced, not silently tallied as read.',
+    file: 'js/mime.js',
+    find: `  if (originalLength <= MAX_BODY_BYTES) return '';`,
+    replace: `  return '';
+  // eslint-disable-next-line no-unreachable
+  if (originalLength <= MAX_BODY_BYTES) return '';`,
+    mustKill: [
+      'an oversized body is clipped, and the note says exactly that',
+      'a body under the ceiling earns no note',
+    ],
+    // The round-5 lesson, applied on day one instead of after the fact: a
+    // silent clip makes the closing tally a lie about what was read.
+  },
+
+  {
+    id: 'body-mismatch-string-compare',
+    promise: 'A link\'s claim is compared by registrable domain, never by hostname string.',
+    file: 'js/body.js',
+    find: `      if (claimedDomain !== linkDomain && claimedDomain !== effectiveDomain) {`,
+    replace: `      if (claimed !== linkHost && claimed !== effective.hostname) {`,
+    mustKill: [
+      'the same registrable domain is never a mismatch',
+      'a subdomain of the claimed domain is never a mismatch',
+    ],
+    // The replacement is the obvious first draft: string against string. It
+    // fires on `www.paypal.com` over a paypal.com link — a warning printed on
+    // half of all honest mail, which is how a warning stops being read.
+  },
+
+  {
+    id: 'address-dressed-as-domain',
+    promise: 'An address literal is named whole, never squeezed through the domain logic.',
+    file: 'js/body.js',
+    find: `  return isAddressLiteral(host) ? host : registrableDomain(host);`,
+    replace: `  return registrableDomain(host);`,
+    mustKill: ['an address literal is named whole, never as two octets in a domain suit'],
+    // The original, found on the second real-shaped probe: registrableDomain
+    // reads 203.0.113.44 as labels and answers "113.44", and the card printed
+    // that as where the link goes.
+  },
+
+  {
+    id: 'body-form-quiet',
+    promise: 'A form inside a mail body is always a warning row.',
+    file: 'js/body.js',
+    find: `    warn(\`form:\${host ?? '(unstated)'}\`, {`,
+    replace: `    if (false) warn(\`form:\${host ?? '(unstated)'}\`, {`,
+    mustKill: ['a form in a mail body is bad, named with its action'],
+  },
+
+  {
+    id: 'undeclared-markup-read-as-plain',
+    promise: 'A body that is visibly markup is judged by its hrefs, never by its decoy text.',
+    file: 'js/mime.js',
+    find: `  const contentType = !declared.trim() && MARKUP_RE.test(body)
+    ? parseContentType('text/html')
+    : parseContentType(declared);`,
+    replace: `  const contentType = parseContentType(declared);`,
+    mustKill: [
+      'an undeclared body that is visibly markup is read as HTML',
+      'a body-only html paste judges the hrefs, not the decoy text',
+    ],
+    // The original, found by running the real binary over a body-only paste:
+    // with no Content-Type the HTML was read as plain text, the hrefs
+    // vanished inside their angle brackets, and the card tallied "dhl.de —
+    // 1 link" for a link that went to a bare IP.
+  },
+
+  {
+    id: 'markup-script-read-as-text',
+    promise: 'Script and style content is never read as reader-visible text or links.',
+    file: 'js/markup.js',
+    find: `        const close = lower.indexOf(\`</\${tag.name}\`, i);
+        i = close === -1 ? n : close;
+        break;`,
+    replace: `        break;`,
+    mustKill: [
+      'script and style content is not text and yields no links',
+      'a script that never closes swallows the rest, like a browser',
+    ],
+    // Without the skip, a URL inside a <script> block counts as a link the
+    // reader could click — a claim about text no mail client ever shows.
   },
 ];

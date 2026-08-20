@@ -12,29 +12,36 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { lookup, validate, verdictRows } from '../js/snapshot.js';
+import { analyseBody } from '../js/body.js';
 import { clearClipboard, readClipboard } from '../js/clipboard.js';
 import { analyse } from '../js/findings.js';
 import { createKeyReader, isQuit, untilQuit } from '../js/keys.js';
+import { parseParts, splitMessage } from '../js/mime.js';
 import { createRenderer } from '../js/terminal.js';
-import { clippedNote, MAX_HEADER_BYTES, readHeaders, skippedNote } from '../js/unfold.js';
+import { clippedNote, MAX_HEADER_BYTES, readHeaders } from '../js/unfold.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DATA = join(HERE, '..', 'data');
 const VERSION = createRequire(import.meta.url)('../package.json').version;
 
-const USAGE = `kuvertii — read what an email header says about you
+const USAGE = `kuvertii — read what an email says about you
 
   kuvertii                 press space to read the clipboard, q to quit
-  kuvertii <file>          analyse a header or .eml file
-  cat header.txt | kuvertii
+  kuvertii <file>          analyse a message, a header block, or a .eml file
+  cat message.eml | kuvertii
+
+Paste the whole "Show Original" / "View Source" output — header and body.
+The body is described, never rendered: no image is fetched, no script runs,
+no attachment is opened.
 
 Options
-  --keep         do not empty the clipboard after a successful read
-  --no-colour    plain output (also honoured: NO_COLOR)
-  -h, --help     this text
-  -v, --version  version
+  --headers-only  read the header block and leave the body unread
+  --keep          do not empty the clipboard after a successful read
+  --no-colour     plain output (also honoured: NO_COLOR)
+  -h, --help      this text
+  -v, --version   version
 
-Nothing is sent anywhere. Links found in the header are printed defanged —
+Nothing is sent anywhere. Links found in the message are printed defanged —
 hxxps://example[.]com — so that no terminal turns them into something
 clickable. Nothing in this program ever opens one.`;
 
@@ -81,37 +88,40 @@ function blocklistItems(results) {
 
 // ---------------------------------------------------------------------- input
 
-/**
- * Take the header block out of whatever was handed over.
- *
- * A .eml file is a header block followed by a blank line and a body. The
- * parser stops at that line anyway, but cutting first keeps a quoted `Subject:`
- * inside a reply from ever being read as a field.
- */
-function headerBlock(text) {
-  const end = text.search(/\r?\n\r?\n/);
-  const block = end === -1 ? text : text.slice(0, end);
+// --------------------------------------------------------------------- report
+
+async function report(text, renderer, out = process.stdout, { headersOnly = false } = {}) {
+  // The paste decides what this is: a header block, a whole message, or a
+  // body that lost its header. js/mime.js makes that call for both front ends.
+  const { headerText, bodyText, bodyOnly } = splitMessage(text);
   // Same ceiling the page applies, for the same reason: a header this long is
   // not one a mail server produced. Clipped rather than refused — the fields
   // worth reading sit at the top — but never in silence: the closing tally
   // reads as a complete account of the input, so it has to say when it is not.
-  return {
-    block: block.length > MAX_HEADER_BYTES ? block.slice(0, MAX_HEADER_BYTES) : block,
-    clipped: clippedNote(block.length),
-  };
-}
+  const block = headerText.length > MAX_HEADER_BYTES ? headerText.slice(0, MAX_HEADER_BYTES) : headerText;
+  const clipped = clippedNote(headerText.length);
+  const { headers } = readHeaders(block);
 
-// --------------------------------------------------------------------- report
+  let bodyRead = { parts: [], notes: [] };
+  if (!headersOnly) {
+    try {
+      bodyRead = parseParts(headers, bodyText);
+    } catch (error) {
+      // parseParts promises to degrade rather than throw; this is the last
+      // line of that promise, and it reports the failure as what it is.
+      bodyRead = {
+        parts: [],
+        notes: [` The body could not be taken apart (${error.message}). That is a fault in this tool, not a fact about the message — the body findings are missing, not clear.`],
+      };
+    }
+  }
+  const { parts, notes } = bodyRead;
 
-async function report(text, renderer, out = process.stdout) {
-  const { block, clipped } = headerBlock(text);
-  const { headers, skipped } = readHeaders(block);
-  if (!headers.length) {
+  const findings = [...analyse(headers), ...analyseBody(parts, { bodyOnly })];
+  if (!headers.length && !findings.length) {
     out.write(`${renderer.paint('\x1b[33m', `Nothing here parsed as a header block.${clipped}`)}\n`);
     return false;
   }
-
-  const findings = analyse(headers);
   if (!findings.length) {
     out.write(`Parsed ${headers.length} header fields, but found nothing noteworthy.${clipped}\n`);
     return true;
@@ -126,7 +136,14 @@ async function report(text, renderer, out = process.stdout) {
     out.write(`${renderer.renderFinding(rendered)}\n`);
   }
 
-  out.write(`\n${renderer.paint('\x1b[2m', `${headers.length} header fields read.${skippedNote(skipped)}${clipped} Nothing left this machine.`)}\n`);
+  // The tally is a complete account of what was read — and, under
+  // --headers-only, of what deliberately was not.
+  const read = [
+    headers.length ? `${headers.length} header field${headers.length === 1 ? '' : 's'}` : null,
+    parts.length ? `${parts.length} body part${parts.length === 1 ? '' : 's'}` : null,
+  ].filter(Boolean).join(' and ');
+  const bodySkipped = headersOnly && /\S/.test(bodyText) ? ' The body was not read, as asked.' : '';
+  out.write(`\n${renderer.paint('\x1b[2m', `${read} read.${bodySkipped}${notes.join('')}${clipped} Nothing left this machine.`)}\n`);
   return true;
 }
 
@@ -147,7 +164,7 @@ function readStdin() {
  * Raw mode is what makes a single keypress possible, and it is restored on
  * every exit path — a terminal left in raw mode stops echoing what is typed.
  */
-async function interactive(renderer, { wipe }) {
+async function interactive(renderer, { wipe, headersOnly }) {
   const { stdin, stdout } = process;
   stdout.write(`${renderer.paint('\x1b[2m', 'Copy a header, then press space to read it. q to quit.')}\n`);
 
@@ -195,7 +212,7 @@ async function interactive(renderer, { wipe }) {
 
       // Leave raw mode while reporting so Ctrl-C works normally during output.
       stdin.setRawMode(false);
-      const parsed = await report(text, renderer);
+      const parsed = await report(text, renderer, process.stdout, { headersOnly });
 
       // Only wipe once something was actually read. Emptying it after a failed
       // parse would take away the header the reader still needs.
@@ -241,6 +258,7 @@ async function main(argv) {
   }
 
   const wipe = !args.includes('--keep');
+  const headersOnly = args.includes('--headers-only');
   // Boolean(), not the raw value: process.stdout.isTTY is `undefined` rather
   // than false when stdout is a pipe, and `undefined` would trigger the
   // renderer's default parameter and switch colour back on for exactly the
@@ -260,7 +278,7 @@ async function main(argv) {
       return null;
     });
     if (text === null) return 1;
-    return (await report(text, renderer)) ? 0 : 1;
+    return (await report(text, renderer, process.stdout, { headersOnly })) ? 0 : 1;
   }
 
   if (!process.stdin.isTTY) {
@@ -269,10 +287,10 @@ async function main(argv) {
       process.stderr.write('Nothing on stdin.\n');
       return 1;
     }
-    return (await report(text, renderer)) ? 0 : 1;
+    return (await report(text, renderer, process.stdout, { headersOnly })) ? 0 : 1;
   }
 
-  return interactive(renderer, { wipe });
+  return interactive(renderer, { wipe, headersOnly });
 }
 
 // `process.exitCode`, never `process.exit()`.

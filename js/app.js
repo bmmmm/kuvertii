@@ -3,9 +3,11 @@
 
 import { checkHost } from './blocklist.js';
 import { verdictRows } from './snapshot.js';
+import { analyseBody } from './body.js';
 import { neutralise } from './control.js';
 import { analyse } from './findings.js';
-import { clippedNote, MAX_HEADER_BYTES, readHeaders, skippedNote } from './unfold.js';
+import { parseParts, splitMessage } from './mime.js';
+import { clippedNote, MAX_HEADER_BYTES, readHeaders } from './unfold.js';
 
 const input = document.querySelector('#header-input');
 const results = document.querySelector('#results');
@@ -94,29 +96,47 @@ async function appendBlocklistVerdict(list, hosts) {
 
 function run() {
   const pasted = input.value;
-  // A ceiling on how long this tab can stop responding: analyse() is synchronous
-  // and there is no worker behind it. Clipped rather than refused, because the
-  // fields worth reading are at the top of a header and a reader who pasted a
-  // whole mailbox is better served by an answer than by a complaint.
-  const text = pasted.length > MAX_HEADER_BYTES ? pasted.slice(0, MAX_HEADER_BYTES) : pasted;
-  // One wording for both renderers — see clippedNote for how the two drifted.
-  const clipped = clippedNote(pasted.length);
   results.replaceChildren();
 
-  if (!text.trim()) {
+  if (!pasted.trim()) {
     emptyState.hidden = false;
     status.textContent = '';
     return;
   }
 
-  const { headers, skipped } = readHeaders(text);
-  if (!headers.length) {
+  // The paste decides what this is: a header block, a whole message, or a
+  // body that lost its header. js/mime.js makes that call for both front ends.
+  const { headerText, bodyText, bodyOnly } = splitMessage(pasted);
+  // A ceiling on how long this tab can stop responding: analyse() is synchronous
+  // and there is no worker behind it. Clipped rather than refused, because the
+  // fields worth reading are at the top of a header and a reader who pasted a
+  // whole mailbox is better served by an answer than by a complaint.
+  const text = headerText.length > MAX_HEADER_BYTES ? headerText.slice(0, MAX_HEADER_BYTES) : headerText;
+  // One wording for both renderers — see clippedNote for how the two drifted.
+  const clipped = clippedNote(headerText.length);
+
+  const { headers } = readHeaders(text);
+
+  let bodyRead;
+  try {
+    bodyRead = parseParts(headers, bodyText);
+  } catch (error) {
+    // parseParts promises to degrade rather than throw; this is the last line
+    // of that promise, and it reports the failure as what it is.
+    bodyRead = {
+      parts: [],
+      notes: [` The body could not be taken apart (${error.message}). That is a fault in this tool, not a fact about the message — the body findings are missing, not clear.`],
+    };
+  }
+  const { parts, notes } = bodyRead;
+
+  const findings = [...analyse(headers), ...analyseBody(parts, { bodyOnly })];
+  if (!headers.length && !findings.length) {
     emptyState.hidden = false;
     status.textContent = `Nothing here parsed as a header block.${clipped}`;
     return;
   }
 
-  const findings = analyse(headers);
   emptyState.hidden = true;
 
   if (!findings.length) {
@@ -124,7 +144,13 @@ function run() {
     return;
   }
 
-  status.textContent = `${headers.length} header fields read.${skippedNote(skipped)} Nothing left this page.${clipped}`;
+  // The status line is a complete account of what was read — headers, body
+  // parts, and every ceiling that bit along the way.
+  const read = [
+    headers.length ? `${headers.length} header field${headers.length === 1 ? '' : 's'}` : null,
+    parts.length ? `${parts.length} body part${parts.length === 1 ? '' : 's'}` : null,
+  ].filter(Boolean).join(' and ');
+  status.textContent = `${read} read.${notes.join('')} Nothing left this page.${clipped}`;
 
   for (const finding of findings) {
     const { card, list } = renderFinding(finding);

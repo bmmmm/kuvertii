@@ -28,7 +28,11 @@ const COMMON_TLDS = new Set([
 ]);
 
 /** Does this text contain an address or domain ending in a TLD that exists? */
-function hasKnownTld(text) {
+// Exported for js/body.js: a link's visible text only *claims* a destination
+// when it ends in a TLD a reader would recognise — `node.js` in a link label
+// is a product name, not a domain, and accusing it of going elsewhere would
+// put a false warning on ordinary mail.
+export function hasKnownTld(text) {
   const matches = String(text).match(/\.([A-Za-z]{2,12})\b/g) ?? [];
   return matches.some((m) => COMMON_TLDS.has(m.slice(1).toLowerCase()));
 }
