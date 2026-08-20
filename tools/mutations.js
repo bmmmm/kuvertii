@@ -104,7 +104,8 @@ function neutraliseDisabledByMutation(text) {
     file: 'js/findings.js',
     find: `  const allPass = decisiveVerdicts.length >= 2
     && decisiveVerdicts.every((verdict) => verdict === 'pass')
-    && compauth !== 'fail';`,
+    && compauth !== 'fail'
+    && !items.some((item) => item.level === 'bad');`,
     replace: `  const allPass = !failed.length && compauth !== 'fail' && decisiveVerdicts.length >= 2;`,
     mustKill: [
       '"every check passed" is never printed over a check that did not',
@@ -116,6 +117,21 @@ function neutraliseDisabledByMutation(text) {
     // did not, so 168 combinations kept "Every check passed" over a row saying
     // the opposite. A fix written against one example, caught by an invariant
     // widened to the whole vocabulary.
+  },
+
+  {
+    id: 'allclear-ignores-bad-rows',
+    promise: 'The all-clear headline is denied by any bad row the card carries.',
+    file: 'js/findings.js',
+    find: `    && compauth !== 'fail'
+    && !items.some((item) => item.level === 'bad');`,
+    replace: `    && compauth !== 'fail';`,
+    mustKill: ['a bad reason row denies the all-clear headline, even when every verdict passed'],
+    // Microsoft's `compauth=pass reason=000` writes a good compauth row and a bad
+    // reason row saying the message failed outright. With the clause gone, the
+    // word-level test prints "every check passed" over that red row — the tone
+    // reads the rows, and the headline has to read the same ones. A generative
+    // probe over full messages found it; the two fixtures never could.
   },
 
   {

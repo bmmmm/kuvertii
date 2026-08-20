@@ -1674,9 +1674,16 @@ function authFinding(headers) {
   // vocabulary. The vocabulary is enumerated in test/verdicts.js; the invariant
   // there now walks all of it.
   const decisiveVerdicts = [...DECISIVE].map((mechanism) => verdicts[mechanism]).filter(Boolean);
+  // Read off the rows, for the reason the tone below is: the headline is the
+  // other place "everything passed" is decided, and it drifted the same way the
+  // tone once had. A Microsoft `compauth=pass reason=000` writes a good compauth
+  // row and a `bad` reason row that says the message failed authentication
+  // outright — decisive verdicts all pass, so the word-level test called it
+  // all-clear over a red row. Any bad row the card carries denies the headline.
   const allPass = decisiveVerdicts.length >= 2
     && decisiveVerdicts.every((verdict) => verdict === 'pass')
-    && compauth !== 'fail';
+    && compauth !== 'fail'
+    && !items.some((item) => item.level === 'bad');
 
   return {
     id: 'auth',

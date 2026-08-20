@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { analyse, guardSection } from '../js/findings.js';
+import { ALL_CLEAR_TITLE, analyse, guardSection } from '../js/findings.js';
 import { parseHeaders } from '../js/unfold.js';
 import { BULK_HEADER, MICROSOFT_HEADER, RECIPIENT } from './fixtures.js';
 
@@ -1097,6 +1097,37 @@ test('ordinary mail does not trip the last-hop check', () => {
       undefined,
     );
   }
+});
+
+test('a bad reason row denies the all-clear headline, even when every verdict passed', () => {
+  // A generative probe over full messages found this: Microsoft's
+  // `compauth=pass reason=000` writes a good compauth row AND a bad row saying
+  // the message failed authentication outright. SPF/DKIM/DMARC all passing, the
+  // headline read the verdict words and printed "every check passed" directly
+  // over that red row. The headline must read the rows the tone already reads.
+  const card = analyse(parseHeaders(
+    'From: Support <a@sender.example>\n'
+    + 'Authentication-Results: mx.example; dkim=pass header.d=sender.example '
+    + 'dmarc=pass header.from=sender.example compauth=pass reason=000\n',
+  )).find((f) => f.id === 'auth');
+
+  assert.ok(card.items.some((i) => i.level === 'bad'), 'the reason=000 row is bad');
+  assert.notEqual(card.title, ALL_CLEAR_TITLE, 'so the card must not headline all-clear');
+  assert.equal(card.tone, 'alert', 'and it is toned alert, as any card with a bad row is');
+});
+
+test('every verdict passing with no bad row keeps the all-clear headline', () => {
+  // The other direction, so the fix is a scalpel and not a hammer: the same
+  // shape with a reason code that carries no failure (109 = would have passed
+  // under a DMARC record) still earns the headline it has always had.
+  const card = analyse(parseHeaders(
+    'From: Support <a@sender.example>\n'
+    + 'Authentication-Results: mx.example; dkim=pass header.d=sender.example '
+    + 'dmarc=pass header.from=sender.example compauth=pass reason=109\n',
+  )).find((f) => f.id === 'auth');
+
+  assert.ok(!card.items.some((i) => i.level === 'bad'), 'nothing on the card is bad');
+  assert.equal(card.title, ALL_CLEAR_TITLE, 'so the all-clear headline stands');
 });
 
 test('a score that is not a score is not read as the worst one', () => {
