@@ -68,6 +68,12 @@ export function analyseBody(parts, { headers = [], bodyOnly = false } = {}) {
   const tracking = guardSection('body tracking', () => trackingFinding(parts, scanOf, headers));
   if (tracking) findings.push(tracking);
 
+  const attachments = guardSection('attachments', () => attachmentFinding(parts));
+  if (attachments) findings.push(attachments);
+
+  const divergence = guardSection('plain/html divergence', () => divergenceFinding(parts, scanOf));
+  if (divergence) findings.push(divergence);
+
   return findings;
 }
 
@@ -563,6 +569,203 @@ function headerIdentifiers(headers) {
   offer(get(headers, 'message-id').match(/<?([^<>@\s]+)@/)?.[1], 'Message-ID');
 
   return [...tokens].map(([token, field]) => ({ token, field }));
+}
+
+// ---------------------------------------------------------------- attachments
+
+// Extensions whose double-click runs code. A file wearing one arrived in
+// mail, where no honest workflow sends executables.
+const EXECUTABLE_EXT_RE = /\.(exe|scr|com|pif|bat|cmd|msi|jar|js|jse|vbs|vbe|wsf|wsh|hta|ps1|lnk|application)$/i;
+
+// A document-looking extension with an executable one behind it — the oldest
+// naming trick in mail, built for clients that hide the real extension.
+const DOUBLE_EXTENSION_RE = /\.(pdf|docx?|xlsx?|pptx?|jpe?g|png|gif|txt|html?|csv|mp3|mp4|zip)\.(exe|scr|com|pif|bat|cmd|msi|jar|js|jse|vbs|vbe|wsf|wsh|hta|ps1|lnk|application)$/i;
+
+// Archives are how executables usually arrive wrapped; worth a line, not an
+// accusation — plenty of honest mail ships a zip.
+const ARCHIVE_EXT_RE = /\.(zip|rar|7z|iso|img|tar|gz|tgz|cab|ace|arj)$/i;
+
+// The magic numbers this card can recognise in a part's first bytes. Small on
+// purpose: only signatures unambiguous enough that a mismatch is a statement,
+// not a guess.
+const MAGIC = [
+  ['a Windows program (MZ)', [0x4d, 0x5a]],
+  ['a Linux program (ELF)', [0x7f, 0x45, 0x4c, 0x46]],
+  ['a PDF', [0x25, 0x50, 0x44, 0x46]],
+  ['a ZIP archive', [0x50, 0x4b, 0x03, 0x04]],
+  ['a RAR archive', [0x52, 0x61, 0x72, 0x21]],
+  ['a 7z archive', [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]],
+  ['a gzip stream', [0x1f, 0x8b]],
+  ['a PNG image', [0x89, 0x50, 0x4e, 0x47]],
+  ['a JPEG image', [0xff, 0xd8, 0xff]],
+  ['a GIF image', [0x47, 0x49, 0x46, 0x38]],
+];
+
+// What the declared type's first bytes should be, where that is knowable.
+// ZIP answers for the whole OOXML family — a .docx *is* a zip.
+const DECLARED_MAGIC = [
+  [/^application\/pdf$/, 'a PDF'],
+  [/^image\/png$/, 'a PNG image'],
+  [/^image\/jpe?g$/, 'a JPEG image'],
+  [/^image\/gif$/, 'a GIF image'],
+  [/^application\/(zip|x-zip-compressed|vnd\.openxmlformats-officedocument\..+)$/, 'a ZIP archive'],
+];
+
+function magicOf(head) {
+  const bytes = head ?? [];
+  for (const [name, signature] of MAGIC) {
+    if (signature.length <= bytes.length && signature.every((byte, i) => bytes[i] === byte)) {
+      return name;
+    }
+  }
+  return null;
+}
+
+/**
+ * The attachment inventory: names, declared types, sizes, and the tells.
+ *
+ * Described, never opened: nothing is decoded beyond the first bytes every
+ * part already carries, and those are read only to ask whether they agree
+ * with the declared type. Deliberately not examined — and said so on the
+ * card rather than hidden in code: calendar parts that add themselves, AMP
+ * parts, inline cid: image mapping, and any archive's contents.
+ */
+function attachmentFinding(parts) {
+  // Attachments by declaration, by name, or by being an opaque non-text part
+  // — a PDF nobody labelled is still a PDF that arrived. Inline parts are the
+  // message's own furniture (cid: images) and stay off the inventory.
+  const attached = parts.filter((part) => part.disposition !== 'inline'
+    && (part.disposition === 'attachment'
+      || Boolean(part.filename)
+      || (!part.contentType.startsWith('text/') && !part.contentType.startsWith('multipart/'))));
+  if (!attached.length) return null;
+
+  const items = [];
+  for (const part of attached) {
+    const name = part.filename ?? '(unnamed)';
+    const size = Number.isSafeInteger(part.bytesDeclared)
+      ? `${part.bytesDeclared.toLocaleString('en')} bytes`
+      : 'size unstated';
+
+    const tells = [];
+    if (DOUBLE_EXTENSION_RE.test(name)) {
+      tells.push({
+        level: 'bad',
+        note: 'The name wears two extensions — a document\'s in the middle, an executable\'s at the end. Clients that hide known extensions show only the harmless half, which is the point of naming it this way.',
+      });
+    } else if (EXECUTABLE_EXT_RE.test(name)) {
+      tells.push({
+        level: 'bad',
+        note: 'The extension is one the operating system runs rather than opens. No honest workflow sends executables by mail.',
+      });
+    } else if (ARCHIVE_EXT_RE.test(name)) {
+      tells.push({
+        level: 'caution',
+        note: 'An archive. Its contents are not examined here — an archive is also how an executable usually arrives wrapped.',
+      });
+    }
+
+    // The first bytes against the declared type — the one look inside this
+    // card takes, and the only one.
+    const actual = magicOf(part.head);
+    const expected = DECLARED_MAGIC.find(([re]) => re.test(part.contentType))?.[1];
+    if (actual && /program/.test(actual) && !/octet-stream/.test(part.contentType)) {
+      tells.push({
+        level: 'bad',
+        note: `Declared as ${part.contentType}, but its first bytes are those of ${actual}. Whatever the name and type say, this is code.`,
+      });
+    } else if (expected && actual && expected !== actual) {
+      tells.push({
+        level: 'caution',
+        note: `Declared as ${part.contentType}, but its first bytes are those of ${actual}, not ${expected}. The type a mail client shows is the declared one; the type that matters is what the bytes are.`,
+      });
+    }
+
+    const worst = tells.find((tell) => tell.level === 'bad') ?? tells[0];
+    items.push({
+      label: name,
+      value: `Declared as ${part.contentType}, ${size}.${part.clipped ? ' Larger than what was read.' : ''}`,
+      mono: true,
+      level: worst?.level ?? null,
+      emphasis: worst?.level === 'bad',
+      note: tells.map((tell) => tell.note).join(' ') || null,
+    });
+  }
+
+  return {
+    id: 'attachments',
+    title: 'What travels attached to this message',
+    tone: items.some((item) => item.level === 'bad') ? 'alert' : 'info',
+    lede: 'Named and described, never opened: nothing here was decoded beyond each part\'s first bytes, which were read only to check that they agree with the declared type. Not examined at all: archive contents, calendar parts that add themselves, AMP parts, and inline image wiring.',
+    items,
+  };
+}
+
+// ------------------------------------------------------- plain/html divergence
+
+/**
+ * Links the HTML carries that the plain-text version never mentions.
+ *
+ * A message's two renderings are supposed to say the same thing. Targets
+ * compared where the reader would land — redirects unwrapped, by registrable
+ * domain — so a tracked link and its plain-text twin count as the same
+ * destination, and only genuinely absent ones diverge.
+ */
+function divergenceFinding(parts, scanOf) {
+  const plainParts = parts.filter((part) => part.contentType === 'text/plain' && part.text);
+  const htmlParts = parts.filter((part) => part.contentType === 'text/html' && part.text);
+  if (!plainParts.length || !htmlParts.length) return null;
+
+  const destination = (url) => {
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return null;
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    const unwrapped = unwrapRedirect(parsed.href)?.destination;
+    if (unwrapped) {
+      try {
+        return party(new URL(unwrapped).hostname);
+      } catch {
+        /* fall through to the visible host */
+      }
+    }
+    return party(parsed.hostname);
+  };
+
+  const plainTargets = new Set();
+  for (const part of plainParts) {
+    for (const url of extractUrls(part.text)) {
+      const target = destination(url);
+      if (target) plainTargets.add(target);
+    }
+  }
+
+  const htmlOnly = new Set();
+  for (const part of htmlParts) {
+    for (const link of scanOf(part).links) {
+      const target = destination(String(link.href ?? '').trim());
+      if (target && !plainTargets.has(target)) htmlOnly.add(target);
+    }
+  }
+  if (!htmlOnly.size) return null;
+
+  const shown = [...htmlOnly].slice(0, 8);
+  return {
+    id: 'divergence',
+    title: 'The two versions of this message do not say the same thing',
+    tone: 'info',
+    lede: 'A message usually carries its content twice — once as HTML, once as plain text — and a reader only ever sees one. Links that exist in the HTML alone are invisible to anyone reading the plain version, and to most preview and quoting tools.',
+    items: [{
+      label: `${htmlOnly.size} destination${htmlOnly.size === 1 ? '' : 's'} only the HTML links to`,
+      value: `${shown.join(', ')}${htmlOnly.size > shown.length ? ` and ${htmlOnly.size - shown.length} more` : ''}`,
+      mono: true,
+      level: 'caution',
+      note: 'What you see in a plain-text client is not what the HTML clicks. Redirects were unwrapped before comparing, so a tracked link and its plain twin count as one destination.',
+    }],
+  };
 }
 
 /**

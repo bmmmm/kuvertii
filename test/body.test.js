@@ -198,7 +198,7 @@ test('a fault in the body costs the body sections, each reported by its own guar
     get text() { throw new Error('deliberate'); },
   }];
   const findings = analyseBody(poisoned);
-  assert.equal(findings.length, 2);
+  assert.ok(findings.length >= 2, 'every section that read the part reports');
   for (const finding of findings) {
     assert.match(finding.items[0].label, /failed/);
     assert.equal(finding.items[0].level, 'fault');
@@ -379,6 +379,127 @@ test('hex inside a longer hex run is not a candidate', () => {
 
 test('a body with no tracking shape at all yields no tracking card', () => {
   assert.equal(trackingCard(htmlPart('<p>Just prose, no links, no images.</p>')), undefined);
+});
+
+// ------------------------------------------------------------- attachments
+
+const attachment = (over = {}) => [{
+  contentType: 'application/pdf', charset: null, disposition: 'attachment',
+  filename: 'rechnung.pdf', transferEncoding: 'base64', bytesDeclared: 90210,
+  text: null, head: [0x25, 0x50, 0x44, 0x46, 0x2d, 0x31], clipped: false,
+  ...over,
+}];
+
+const attachmentCard = (parts) => analyseBody(parts).find((f) => f.id === 'attachments');
+
+test('an attachment is inventoried: name, declared type, size', () => {
+  const card = attachmentCard(attachment());
+  const row = card.items[0];
+  assert.equal(row.label, 'rechnung.pdf');
+  assert.match(row.value, /application\/pdf/);
+  assert.match(row.value, /90,210 bytes/);
+  assert.equal(row.level, null, 'a PDF that is a PDF earns no warning');
+});
+
+test('a double extension is bad, and the trick is explained', () => {
+  const card = attachmentCard(attachment({ filename: 'rechnung.pdf.exe' }));
+  const row = card.items[0];
+  assert.equal(row.level, 'bad');
+  assert.match(row.note, /two extensions/);
+  assert.equal(card.tone, 'alert');
+});
+
+test('a bare executable extension is bad', () => {
+  const card = attachmentCard(attachment({ filename: 'update.js', contentType: 'text/javascript' }));
+  assert.equal(card.items[0].level, 'bad');
+  assert.match(card.items[0].note, /runs rather than opens/);
+});
+
+test('an archive is a caution, not an accusation', () => {
+  const card = attachmentCard(attachment({ filename: 'fotos.zip', contentType: 'application/zip', head: [0x50, 0x4b, 0x03, 0x04] }));
+  assert.equal(card.items[0].level, 'caution');
+  assert.match(card.items[0].note, /not examined/);
+});
+
+test('a declared PDF whose first bytes are a program is code, said plainly', () => {
+  const card = attachmentCard(attachment({ head: [0x4d, 0x5a, 0x90, 0x00] }));
+  const row = card.items[0];
+  assert.equal(row.level, 'bad');
+  assert.match(row.note, /first bytes are those of a Windows program/);
+});
+
+test('a declared PDF that begins like a PNG is a mismatch, stated as one', () => {
+  const card = attachmentCard(attachment({ head: [0x89, 0x50, 0x4e, 0x47] }));
+  const row = card.items[0];
+  assert.equal(row.level, 'caution');
+  assert.match(row.note, /those of a PNG image, not a PDF/);
+});
+
+test('unknown first bytes accuse nobody', () => {
+  const card = attachmentCard(attachment({ head: [0x01, 0x02, 0x03, 0x04] }));
+  assert.equal(card.items[0].level, null);
+});
+
+test('a docx is a zip by construction, never a mismatch', () => {
+  const card = attachmentCard(attachment({
+    filename: 'brief.docx',
+    contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    head: [0x50, 0x4b, 0x03, 0x04],
+  }));
+  assert.equal(card.items[0].level, null, 'PK bytes are what a docx should carry');
+});
+
+test('inline furniture stays off the inventory; text parts too', () => {
+  assert.equal(attachmentCard([
+    { contentType: 'image/png', disposition: 'inline', filename: 'logo.png', head: [], text: null },
+    { contentType: 'text/plain', disposition: null, filename: null, head: [], text: 'hello' },
+  ]), undefined);
+});
+
+test('an unnamed opaque part is still inventoried', () => {
+  const card = attachmentCard(attachment({ filename: null }));
+  assert.equal(card.items[0].label, '(unnamed)');
+});
+
+// ------------------------------------------------------ plain/html divergence
+
+const alternative = (plainText, html) => [
+  { contentType: 'text/plain', disposition: null, filename: null, text: plainText, head: [], clipped: false },
+  { contentType: 'text/html', disposition: null, filename: null, text: html, head: [], clipped: false },
+];
+
+const divergenceCard = (parts) => analyseBody(parts).find((f) => f.id === 'divergence');
+
+test('a destination only the HTML links to is named', () => {
+  const card = divergenceCard(alternative(
+    'Read more: https://news.example/story',
+    '<a href="https://news.example/story">story</a><a href="https://hidden.example/collect">.</a>',
+  ));
+  assert.match(card.items[0].label, /1 destination only the HTML links to/);
+  assert.match(card.items[0].value, /hidden\.example/);
+  assert.doesNotMatch(card.items[0].value, /news\.example/);
+  assert.equal(card.items[0].level, 'caution');
+});
+
+test('matching versions diverge nowhere and say nothing', () => {
+  assert.equal(divergenceCard(alternative(
+    'Read: https://news.example/story',
+    '<a href="https://news.example/other-path">story</a>',
+  )), undefined, 'same registrable domain is the same destination');
+});
+
+test('a decodable redirect counts as where it lands, not where it hops', () => {
+  const destination = Buffer.from('https://news.example/story').toString('base64url');
+  assert.equal(divergenceCard(alternative(
+    'Read: https://news.example/story',
+    `<a href="https://click.tracker.example/V${destination}">story</a>`,
+  )), undefined, 'the tracked link and its plain twin are one destination');
+});
+
+test('with only one version present there is nothing to compare', () => {
+  assert.equal(divergenceCard([
+    { contentType: 'text/html', disposition: null, filename: null, text: '<a href="https://x.example/a">a</a>', head: [] },
+  ]), undefined);
 });
 
 // ------------------------------------------------- the rendering invariants

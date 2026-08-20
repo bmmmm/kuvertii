@@ -926,6 +926,41 @@ function el(tag, className, text) {
   },
 
   {
+    id: 'double-extension-unread',
+    promise: 'A name wearing two extensions is called the trick it is, not a mere executable.',
+    file: 'js/body.js',
+    find: `    if (DOUBLE_EXTENSION_RE.test(name)) {`,
+    replace: `    if (false) {`,
+    mustKill: ['a double extension is bad, and the trick is explained'],
+    // The fallthrough still marks it executable, so the level survives — what
+    // is lost is the explanation of the disguise, which is what the reader
+    // needed: clients that hide known extensions show only the harmless half.
+  },
+
+  {
+    id: 'magic-bytes-unread',
+    promise: 'The declared type is checked against the part\'s first bytes, the one look taken inside.',
+    file: 'js/body.js',
+    find: `    const actual = magicOf(part.head);`,
+    replace: `    const actual = null;`,
+    mustKill: [
+      'a declared PDF whose first bytes are a program is code, said plainly',
+      'a declared PDF that begins like a PNG is a mismatch, stated as one',
+    ],
+  },
+
+  {
+    id: 'divergence-compares-the-hop',
+    promise: 'The two versions are compared where the reader lands, not where the link hops.',
+    file: 'js/body.js',
+    find: `    const unwrapped = unwrapRedirect(parsed.href)?.destination;`,
+    replace: `    const unwrapped = null;`,
+    mustKill: ['a decodable redirect counts as where it lands, not where it hops'],
+    // Compared at the hop, every tracked HTML link diverges from its plain
+    // twin, and the card cries wolf on every newsletter with a tracker.
+  },
+
+  {
     id: 'markup-script-read-as-text',
     promise: 'Script and style content is never read as reader-visible text or links.',
     file: 'js/markup.js',
