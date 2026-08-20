@@ -1,13 +1,21 @@
 # kuvertii
 
-Paste an email header, find out what it says about you.
+Paste an email, find out what it says about you.
 
 **→ [bmmmm.github.io/kuvertii](https://bmmmm.github.io/kuvertii/)**
 
 An email header is a shipping label with the interesting parts written in a
 language nobody reads. Most of it is routine. Some of it is your own address,
 encoded three or four times over, so that a reply, a bounce, a click or an
-unsubscribe can be attributed back to you.
+unsubscribe can be attributed back to you. The body underneath carries the
+other half of the story: where the links actually go, which images report
+that you read it, and what really travels in the attachments.
+
+Paste the whole thing — "Show Original" in Gmail, "View Source" elsewhere —
+and both halves are read. A header alone still works exactly as before; the
+paste decides. The body is **described, never rendered**: no image is
+fetched, no script runs, no attachment is opened, and every quoted snippet is
+made inert on its way to the screen.
 
 ## What it finds
 
@@ -76,6 +84,33 @@ unsubscribe can be attributed back to you.
   `CAT` are translated into words, and "filtering was skipped" is reported as
   the finding it is rather than mistaken for a clean bill.
 
+And when the paste carries the body:
+
+- **Where the links in this message go.** The words of a link and its
+  destination are written independently, and nothing checks them against each
+  other before you click. Visible text naming one domain over a link that
+  leaves for another is called out; so are in-mail forms, `javascript:` and
+  `data:` links, bare-IP and punycode hosts, and login-shaped destination
+  paths. Redirects are unwrapped by decoding them, compared by registrable
+  domain, and every target host goes through the same offline blocklist as
+  the unsubscribe link.
+- **What reading and clicking reveals.** Tracking pixels are named with the
+  host their loading would report to — and when the pixel carries an id, the
+  card says the report would not just say that *someone* read the message,
+  but that you did. Your own address is searched for inside every link —
+  open, percent-encoded, base64, and hashed (SHA-1/SHA-256; an MD5-shaped id
+  is reported as unchecked rather than silently skipped, since MD5 cannot be
+  computed offline here). An id from the header recurring inside a link's
+  query is named as what it is: the join between the message in your mailbox
+  and your click.
+- **What travels attached, and whether the two versions agree.** Attachments
+  are inventoried by name, declared type and size — double extensions,
+  executables and archives called out, and the declared type checked against
+  the part's first bytes, which is the only look inside this tool ever takes.
+  Links that exist in the HTML version but nowhere in the plain-text version
+  get their own card: what you see in a plain client is not what the HTML
+  clicks.
+
 Localised header labels are understood, so a paste out of a German, French,
 Spanish, Italian or Dutch mail client works as-is (`An:`, `Antwort an:`, …).
 
@@ -97,10 +132,14 @@ Nothing you paste leaves the page.
   nothing: `frame-ancestors` is ignored when delivered in a `<meta>` element,
   and GitHub Pages cannot send headers. It is kept for any host that can, and
   not counted on.)
-- Text taken from the header is stripped of characters that are instructions
+- Text taken from the message is stripped of characters that are instructions
   rather than text — terminal escapes, and the bidi overrides that would let a
   hostname reading `evil` be displayed as somebody else's. Their presence is
   reported as a finding, because no sender writes them by accident.
+- The body is described, never rendered: **images are never fetched, scripts
+  never run, attachments never opened.** No body byte reaches an HTML sink —
+  the analysis reads the markup as data and reports on it in its own words,
+  with every quoted snippet defanged and made inert.
 - **Verify it yourself:** load the page, turn off your network, and analyse a
   header. It works. Or watch the network tab — the only request after load is
   the blocklist asset, from this same origin.
@@ -147,9 +186,14 @@ The same analysis, rendered for a terminal:
 
 ```sh
 node bin/kuvertii.js         # press space to read the clipboard, q to quit
-node bin/kuvertii.js mail.eml   # a header file or a whole .eml
+node bin/kuvertii.js mail.eml   # a header block or a whole message, body included
 pbpaste | node bin/kuvertii.js  # or anything else on stdin
 ```
+
+`--headers-only` restricts the read to the header block — the closing tally
+then says so: "The body was not read, as asked." Without it the tally states
+exactly what was read ("9 header fields and 2 body parts read"), and every
+ceiling that bites announces itself in the same breath.
 
 There is nothing to install. `npm link` puts it on your PATH as `kuvertii` if
 you would rather type that; the package declares no dependencies and has no
@@ -224,8 +268,11 @@ than delivery diagnostics.
   Application Insights.
 - **[emlAnalyzer](https://github.com/wahlflo/eml_analyzer)** (MIT) — a local
   Python CLI for whole `.eml` files: MIME structure, attachments, embedded URLs
-  and remote-content trackers. Complementary rather than competing, since
-  kuvertii deliberately never looks past the header block.
+  and remote-content trackers. The closest neighbour now that kuvertii reads
+  bodies too; the difference is the question asked — emlAnalyzer inventories
+  the message for an analyst, kuvertii reads it from the recipient's side and
+  judges what each link, pixel and identifier means for the person it was
+  sent to.
 - **The hosted header analyzers** (MXToolbox, PowerDMARC and a dozen others) —
   they cover authentication and routing well, and several now run client-side.
   Deliberately unlinked here: a header is not anonymous, and sending one to a
@@ -238,7 +285,7 @@ No build step, no dependencies. Node is used only to run the tests and to bake
 the blocklist.
 
 ```sh
-node --test                          # 285 tests, stdlib only
+node --test                          # 410 tests, stdlib only
 node tools/mutate.mjs                # breaks each promise, checks the suite notices
 node tools/promises.mjs              # what is promised, and what would catch it breaking
 node tools/build-blocklist.mjs       # writes data/ (gitignored, built in CI)

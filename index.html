@@ -10,8 +10,8 @@
      here and say so in the console — and GitHub Pages cannot send headers, so it
      is kept for correctness on any host that can, and not counted on. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types 'none'">
-<title>kuvertii — read what an email header says about you</title>
-<meta name="description" content="Paste an email header and see what it reveals: who it was really addressed to, how that address was hidden, and where the unsubscribe link actually leads. Runs entirely in your browser.">
+<title>kuvertii — read what an email says about you</title>
+<meta name="description" content="Paste an email — header, body, or both — and see what it reveals: who it was really addressed to, where the links actually lead, which images report that you read it. Runs entirely in your browser; nothing is fetched, nothing leaves the page.">
 <link rel="stylesheet" href="css/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>✉️</text></svg>">
 </head>
@@ -20,14 +20,14 @@
 <main>
   <header class="masthead">
     <h1>kuvertii</h1>
-    <p class="tagline">An email header is a shipping label with the interesting parts written in a language nobody reads. Paste one in.</p>
+    <p class="tagline">An email header is a shipping label with the interesting parts written in a language nobody reads — and the body carries the links you would actually click. Paste the whole message in.</p>
   </header>
 
   <section class="input-area">
     <label class="visually-hidden" for="header-input">Email header</label>
     <textarea id="header-input" rows="10" spellcheck="false" autocomplete="off"
               autocapitalize="off" autocorrect="off"
-              placeholder="Paste the full header here.&#10;&#10;Apple Mail: View → Message → All Headers&#10;Gmail: ⋮ → Show original&#10;Outlook: File → Properties → Internet headers&#10;Thunderbird: Ctrl+U"></textarea>
+              placeholder="Paste the whole message — header and body — or just the header.&#10;&#10;Gmail: ⋮ → Show original&#10;Apple Mail: View → Message → Raw Source&#10;Outlook: File → Properties → Internet headers&#10;Thunderbird: Ctrl+U"></textarea>
     <div class="controls">
       <button id="analyse" type="button" class="primary">Read it</button>
       <button id="clear" type="button">Clear</button>
@@ -61,6 +61,15 @@
 
       <dt>The route it took</dt>
       <dd>Read from the bottom up, the first hop is the machine that generated the message — often an API call from a datacentre, not the brand on the envelope.</dd>
+
+      <dt>Where the links in the body go</dt>
+      <dd>The words of a link and its destination are written independently. Text naming one domain over a link that leaves for another, in-mail forms, bare IPs and lookalike hosts — read out of the message, never clicked.</dd>
+
+      <dt>What reading and clicking reveals</dt>
+      <dd>Tracking pixels named with the host they report to, your own address found inside the links — open, encoded, or hashed — and header ids that recur in a link, tying the message in your mailbox to your click. Nothing is loaded.</dd>
+
+      <dt>What travels attached</dt>
+      <dd>Attachments inventoried by name, type and size — double extensions and type-vs-bytes mismatches called out. Never opened beyond the first bytes, and links only the HTML version carries get their own card.</dd>
     </dl>
   </section>
 
@@ -68,7 +77,7 @@
 </main>
 
 <footer class="colophon">
-  <p><strong>Nothing you paste leaves this page.</strong> There is no server, no analytics and no storage — not even <code>localStorage</code>. The header lives in one variable and is gone when you close the tab. A Content-Security-Policy in the page source allows one destination and denies the rest, so this is enforced by your browser rather than promised by us. Turn off your network and it still works.</p>
+  <p><strong>Nothing you paste leaves this page.</strong> There is no server, no analytics and no storage — not even <code>localStorage</code>. The message lives in one variable and is gone when you close the tab. The body is described, never rendered: images are never fetched, scripts never run, attachments never opened. A Content-Security-Policy in the page source allows one destination and denies the rest, so this is enforced by your browser rather than promised by us. Turn off your network and it still works.</p>
   <p>The phishing blocklist is a snapshot of <a href="https://github.com/mitchellkrogza/Phishing.Database" rel="noopener noreferrer">Phishing.Database</a> (MIT), baked in at build time and served from this origin — the domain you check is never sent anywhere. A hit is a warning; a miss is not an all-clear.</p>
   <p>Saving this page and opening it from your disk will not work: browsers fetch ES modules over CORS, and a <code>file://</code> page has no origin to grant. Serve the directory instead — <code>node tools/serve.mjs</code> — or use the terminal version, which needs no browser at all.</p>
   <p><a href="https://github.com/bmmmm/kuvertii" rel="noopener noreferrer">Source</a> · GPL-3.0-or-later</p>
