@@ -585,6 +585,21 @@ function el(tag, className, text) {
   },
 
   {
+    id: 'inconclusive-scored-as-survived',
+    promise: 'A mutation run that never reached a verdict is inconclusive, not a survivor.',
+    file: 'tools/mutate.mjs',
+    find: `  if (!ranToCompletion) return 'inconclusive';`,
+    replace: `  if (false) return 'inconclusive';`,
+    mustKill: ['a run that never reached a verdict is inconclusive, never a survivor'],
+    // The harness scoring its own aborted runs. `status !== 0 && ranToCompletion`
+    // read a timed-out or failed-to-spawn run — non-zero exit, no plan emitted —
+    // as SURVIVED, and a live mutation was reported as an unguarded promise on a
+    // byte-identical tree (zero-length-reads-as-partial, 2026-08-20). Without
+    // this guard classifyRun falls back to status alone, so the third outcome
+    // collapses into the two that assume the suite answered.
+  },
+
+  {
     id: 'port-strip-eats-hextet',
     promise: 'An address literal survives normalisation as the address it is.',
     file: 'js/bloom.js',

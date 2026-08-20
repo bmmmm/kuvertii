@@ -19,7 +19,7 @@ import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { MUTATIONS } from './mutations.js';
 
@@ -123,6 +123,46 @@ function runSuite(root) {
   return { status, failed, stdout, ranToCompletion };
 }
 
+/**
+ * The verdict on one mutation run — three outcomes, not two.
+ *
+ * A run that reached a verdict is 'killed' when the suite went red and
+ * 'survived' when it stayed green. A run that never reached one — a timeout, a
+ * crash, or a child that failed to spawn under the sustained load of a long
+ * sweep — is 'inconclusive': the suite could not be asked, so the promise is
+ * neither proven guarded nor proven unguarded.
+ *
+ * Folding that third case into 'survived' is how a transient hiccup once
+ * printed a real gate as a hole. On 2026-08-20 `zero-length-reads-as-partial`
+ * reported SURVIVED in one full run and KILLED in the next on a byte-identical
+ * tree; the mutation was live and the suite would have caught it, but that one
+ * run was cut off before it could — `status !== 0 && ranToCompletion` read the
+ * abort (`ranToCompletion` false) as a survivor. A gate that scores an unasked
+ * question as "unguarded" cannot be trusted to go red for the right reason.
+ */
+export function classifyRun({ status, ranToCompletion }) {
+  if (!ranToCompletion) return 'inconclusive';
+  return status !== 0 ? 'killed' : 'survived';
+}
+
+/**
+ * Run the suite until it reaches a verdict, or give up after a few tries.
+ *
+ * The causes of an inconclusive run are transient — a slow or failed child
+ * spawn late in a 74-mutation sweep, a timeout under momentary load — so a
+ * retry usually reaches the verdict the first attempt was denied. A mutation
+ * that genuinely hangs costs three timeouts and still ends inconclusive, which
+ * is the honest answer: it never turns into a false KILLED or a false SURVIVED.
+ */
+function runSuiteToVerdict(root, attempts = 3) {
+  let last;
+  for (let i = 0; i < attempts; i++) {
+    last = runSuite(root);
+    if (last.ranToCompletion) break;
+  }
+  return last;
+}
+
 function main() {
   const filter = process.argv[2];
   const selected = filter ? MUTATIONS.filter((m) => m.id.includes(filter)) : MUTATIONS;
@@ -167,21 +207,26 @@ function main() {
     try {
       copyTree(files, workspace);
       applyMutation(workspace, mutation);
-      const { status, failed, ranToCompletion } = runSuite(workspace);
+      const run = runSuiteToVerdict(workspace);
+      const { failed } = run;
 
-      const killed = status !== 0 && ranToCompletion;
+      const outcome = classifyRun(run);
+      const killed = outcome === 'killed';
+      const inconclusive = outcome === 'inconclusive';
       const byIntendedTest = mutation.mustKill.filter(
         (name) => failed.some((f) => f.toLowerCase().includes(name.toLowerCase())),
       );
 
-      results.push({ mutation, killed, failed, byIntendedTest });
+      results.push({ mutation, killed, inconclusive, failed, byIntendedTest });
 
       const expected = survivalExpected(mutation);
       const verdict = killed
         ? paint(GREEN, 'KILLED  ')
-        : expected
-          ? paint(YELLOW, 'SURVIVED')
-          : paint(RED, 'SURVIVED');
+        : inconclusive
+          ? paint(YELLOW, 'INCONCL ')
+          : expected
+            ? paint(YELLOW, 'SURVIVED')
+            : paint(RED, 'SURVIVED');
 
       process.stdout.write(`${verdict} ${paint(BOLD, mutation.id)}\n`);
       process.stdout.write(`         ${mutation.promise}\n`);
@@ -191,6 +236,8 @@ function main() {
         if (!byIntendedTest.length) {
           process.stdout.write(`         ${paint(YELLOW, 'but none of the tests named in mustKill — check the mutation is behavioural, not a syntax error')}\n`);
         }
+      } else if (inconclusive) {
+        process.stdout.write(`         ${paint(YELLOW, 'the suite never reached a verdict across three tries — a timeout or a failed spawn, not a survivor. Re-run before trusting the summary.')}\n`);
       } else if (expected) {
         process.stdout.write(`         ${paint(DIM, Array.isArray(mutation.expectedToSurvive)
           ? `not breakable on ${process.platform}, by design — see the registry`
@@ -210,18 +257,30 @@ function main() {
   // than behaviour, which means the promise is still unguarded and the run just
   // looked green. The registry's own rule 2 said so and enforced nothing.
   const wrongTest = results.filter((r) => r.killed && !r.byIntendedTest.length);
-  const unguarded = results.filter((r) => !r.killed && !survivalExpected(r.mutation));
+  // Unguarded and known-gap are verdicts about a suite that answered: a promise
+  // it did not break (survived) is unguarded unless the registry expected it.
+  // An inconclusive run never asked the question, so it belongs in neither — it
+  // is its own bucket, counted below and never folded into "unguarded".
+  const survived = (r) => !r.killed && !r.inconclusive;
+  const unguarded = results.filter((r) => survived(r) && !survivalExpected(r.mutation));
   // A mutation that dies where it was expected to survive is news, but only
   // when the expectation was unconditional. A platform list says "not here",
   // and dying on another platform is exactly what it predicts.
   const staleFlags = results.filter((r) => r.killed && r.mutation.expectedToSurvive === true);
-  const knownGaps = results.filter((r) => !r.killed && survivalExpected(r.mutation));
+  const knownGaps = results.filter((r) => survived(r) && survivalExpected(r.mutation));
+  const inconclusive = results.filter((r) => r.inconclusive);
 
   process.stdout.write(`${paint(BOLD, 'Summary')}\n`);
   process.stdout.write(`  killed:      ${results.filter((r) => r.killed).length}\n`);
   process.stdout.write(`  known gaps:  ${knownGaps.length}${knownGaps.length ? `  (${knownGaps.map((r) => r.mutation.id).join(', ')})` : ''}\n`);
   process.stdout.write(`  unguarded:   ${unguarded.length}${unguarded.length ? `  (${unguarded.map((r) => r.mutation.id).join(', ')})` : ''}\n`);
+  process.stdout.write(`  inconclusive:${inconclusive.length}${inconclusive.length ? `  (${inconclusive.map((r) => r.mutation.id).join(', ')})` : ''}\n`);
   process.stdout.write(`  wrong test:  ${wrongTest.length}${wrongTest.length ? `  (${wrongTest.map((r) => r.mutation.id).join(', ')})` : ''}\n`);
+
+  if (inconclusive.length) {
+    process.stdout.write(`\n${paint(YELLOW, 'These never reached a verdict — re-run; a persistent one is a hang to investigate, not a result:')}\n`);
+    for (const { mutation } of inconclusive) process.stdout.write(`  ${mutation.id}\n`);
+  }
 
   if (staleFlags.length) {
     process.stdout.write(`\n${paint(YELLOW, 'These are now guarded — drop expectedToSurvive from the registry:')}\n`);
@@ -233,7 +292,13 @@ function main() {
     for (const { mutation } of wrongTest) process.stdout.write(`  ${mutation.id}\n`);
   }
 
-  if (unguarded.length || staleFlags.length || wrongTest.length) process.exitCode = 1;
+  if (unguarded.length || staleFlags.length || wrongTest.length || inconclusive.length) {
+    process.exitCode = 1;
+  }
 }
 
-main();
+// Run the sweep only when invoked as a script. Imported for its exported
+// helpers (classifyRun) — by test/mutate.test.js — main() must stay quiet.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}
