@@ -870,6 +870,62 @@ function el(tag, className, text) {
   },
 
   {
+    id: 'pixel-geometry-unread',
+    promise: 'A 1x1 image is named as the tracking pixel it is.',
+    file: 'js/body.js',
+    find: `    if (Number.isInteger(width) && Number.isInteger(height) && width <= 1 && height <= 1) {`,
+    replace: `    if (false) {`,
+    mustKill: [
+      'a 1x1 image is named a tracking pixel, with its host',
+      'a pixel carrying an opaque id is marked as identifying this copy',
+    ],
+  },
+
+  {
+    id: 'address-spellings-unsearched',
+    promise: 'The reader\'s address is searched for in every cheap spelling, base64 included.',
+    file: 'js/body.js',
+    find: `      ['base64', base64Trimmed(address)],
+      ['base64, URL-safe', base64Trimmed(address).replace(/\\+/g, '-').replace(/\\//g, '_')],`,
+    replace: ``,
+    mustKill: ['the base64 spellings are found, both alphabets'],
+    // Base64 is how the address most often travels — an open substring
+    // search alone answers "not carried" about a link that carries it.
+  },
+
+  {
+    id: 'crossref-matches-the-hostname',
+    promise: 'A header id joins a link through its path or query, never through the hostname.',
+    file: 'js/body.js',
+    find: `      if ((parsed.pathname + parsed.search).includes(token)) joined.add(party(parsed.hostname));`,
+    replace: `      if (url.includes(token)) joined.add(party(parsed.hostname));`,
+    mustKill: ['an id that merely echoes the hostname joins nothing'],
+    // The replacement accuses every link on the sender's own numbered
+    // subdomain of tying the mailbox to the click.
+  },
+
+  {
+    id: 'hash-compared-case-sensitively',
+    promise: 'Hex is compared without case, because hex has none.',
+    file: 'js/emailhash.js',
+    find: `    const normalised = token.toLowerCase();`,
+    replace: `    const normalised = token;`,
+    mustKill: ['an uppercase hex token still matches — hex has no case'],
+  },
+
+  {
+    id: 'md5-gap-unstated',
+    promise: 'An MD5-shaped token this tool cannot check is reported as unchecked, never skipped.',
+    file: 'js/emailhash.js',
+    find: `  if (byLength.has(MD5_HEX_LENGTH)) {`,
+    replace: `  if (false) {`,
+    mustKill: ['an MD5-shaped token is reported as unchecked, never silently skipped'],
+    // Saying nothing about the one digest crypto.subtle refuses would read
+    // as "checked and clean" — the false reassurance this project is
+    // written against.
+  },
+
+  {
     id: 'markup-script-read-as-text',
     promise: 'Script and style content is never read as reader-visible text or links.',
     file: 'js/markup.js',

@@ -188,17 +188,21 @@ test('a body-only paste leads with the honest notice', () => {
   assert.ok(findings.some((f) => f.id === 'body-links'));
 });
 
-test('a fault in the body section costs that section and nothing else', () => {
+test('a fault in the body costs the body sections, each reported by its own guard', () => {
   // Fault isolation is inherited from guardSection; a part whose text is a
-  // getter that throws is the cheapest way to prove the boundary holds.
+  // getter that throws is the cheapest way to prove the boundary holds. Both
+  // body producers read the poisoned part, so both report — as faults in
+  // this tool, never as a crash.
   const poisoned = [{
     contentType: 'text/html',
     get text() { throw new Error('deliberate'); },
   }];
   const findings = analyseBody(poisoned);
-  assert.equal(findings.length, 1);
-  assert.match(findings[0].items[0].label, /failed/);
-  assert.equal(findings[0].items[0].level, 'fault');
+  assert.equal(findings.length, 2);
+  for (const finding of findings) {
+    assert.match(finding.items[0].label, /failed/);
+    assert.equal(finding.items[0].level, 'fault');
+  }
 });
 
 test('a body-only HTML paste judges the hrefs, not the decoy text', () => {
@@ -226,6 +230,155 @@ test('an address literal is named whole, never as two octets in a domain suit', 
   assert.match(mismatch.label, /203\.0\.113\.44/);
   assert.doesNotMatch(flat(card), /(?<!\d\.)113\.44/, 'no two-octet pseudo-domain anywhere on the card');
   assert.ok(card.items.some((i) => i.label === '203.0.113.44'), 'the tally names the address whole');
+});
+
+// -------------------------------------------- what reading and clicking reveals
+
+const HEADERS = parseHeaders([
+  'From: news@sender.example',
+  'To: maja.beispiel@example.org',
+  'Feedback-ID: 31859940abc:campaign7:news:esp',
+  'Return-Path: <bounces+31859940abc-maja.beispiel=example.org@mail.sender.example>',
+  'Message-ID: <mid-9f8e7d6c5b4a3210@mail.sender.example>',
+].join('\n'));
+
+const trackingCard = (parts, headers = HEADERS) =>
+  analyseBody(parts, { headers }).find((f) => f.id === 'body-tracking');
+
+test('a 1x1 image is named a tracking pixel, with its host', () => {
+  const card = trackingCard(htmlPart('<img src="https://track.example/o.gif" width="1" height="1">'));
+  const row = card.items.find((i) => /tracking pixel/i.test(i.label));
+  assert.equal(row.level, 'caution');
+  assert.match(row.value, /track\.example/);
+  assert.match(row.value, /Nothing was loaded here/);
+});
+
+test('a pixel carrying an opaque id is marked as identifying this copy', () => {
+  const card = trackingCard(htmlPart(
+    '<img src="https://track.example/o.gif?u=SdBcviQ29tZXMtaGVyZTAx" width="1" height="1">',
+  ));
+  const row = card.items.find((i) => /tracking pixel/i.test(i.label));
+  assert.ok(row.chips.some((c) => /unique to this copy/.test(c)));
+  assert.equal(row.emphasis, true);
+});
+
+test('an ordinary product image is not a pixel, but its host is counted', () => {
+  const card = trackingCard(htmlPart('<img src="https://img.shop.example/shoe.jpg" width="480" height="320">'));
+  assert.equal(card.items.some((i) => /tracking pixel/i.test(i.label)), false);
+  const row = card.items.find((i) => /external image/.test(i.label));
+  assert.match(row.value, /shop\.example/);
+  assert.match(row.value, /reports your IP address/);
+});
+
+test('cid: and data: images load nothing and are not counted as external', () => {
+  const card = trackingCard(htmlPart('<img src="cid:logo" width="1" height="1"><img src="data:image/gif;base64,AAAA">'));
+  assert.equal(card, undefined);
+});
+
+test('the reader\'s address is found open inside a link', () => {
+  const card = trackingCard(htmlPart(
+    '<a href="https://news.example/read?user=maja.beispiel@example.org">read</a>',
+  ));
+  const row = card.items.find((i) => /Your address travels inside the links/.test(i.label));
+  assert.match(row.value, /open/);
+  assert.match(row.value, /news\.example/);
+});
+
+test('the percent-encoded spelling is found too', () => {
+  const card = trackingCard(htmlPart(
+    '<a href="https://t.example/c?u=maja.beispiel%40example.org">read</a>',
+  ));
+  const row = card.items.find((i) => /address travels/.test(i.label));
+  assert.match(row.value, /percent-encoded/);
+});
+
+test('the base64 spellings are found, both alphabets', () => {
+  const standard = Buffer.from('maja.beispiel@example.org').toString('base64').replace(/=+$/, '');
+  const urlsafe = standard.replace(/\+/g, '-').replace(/\//g, '_');
+  const card = trackingCard(htmlPart(
+    `<a href="https://t.example/c?u=${urlsafe}">read</a>`,
+  ));
+  const row = card.items.find((i) => /address travels/.test(i.label));
+  assert.ok(row, 'the base64url spelling is found');
+  assert.match(row.value, /base64/);
+});
+
+test('someone else\'s address in a link is not called yours', () => {
+  const card = trackingCard(htmlPart(
+    '<a href="https://t.example/c?u=someone.else@another.example">read</a>',
+  ));
+  assert.equal(card?.items.some((i) => /address travels/.test(i.label)) ?? false, false);
+});
+
+test('with no header there is no address to search for, and no claim is made', () => {
+  const card = trackingCard(
+    htmlPart('<a href="https://t.example/c?u=maja.beispiel@example.org">read</a>'),
+    [],
+  );
+  assert.equal(card?.items.some((i) => /address travels/.test(i.label)) ?? false, false);
+});
+
+test('a Feedback-ID segment recurring in a link query is the join, named', () => {
+  const card = trackingCard(htmlPart(
+    '<a href="https://click.sender.example/r?fid=31859940abc&x=1">offer</a>',
+  ));
+  const row = card.items.find((i) => /recurs inside the links/.test(i.label));
+  assert.match(row.value, /31859940abc/);
+  assert.match(row.value, /Feedback-ID/);
+  assert.match(row.value, /ties the message in your mailbox to your click/);
+});
+
+test('the Message-ID local part recurring in a link is a join too', () => {
+  const card = trackingCard(htmlPart(
+    '<a href="https://click.sender.example/open/mid-9f8e7d6c5b4a3210">view online</a>',
+  ));
+  assert.ok(card.items.some((i) => /recurs inside the links/.test(i.label) && /Message-ID/.test(i.value)));
+});
+
+test('an id that merely echoes the hostname joins nothing', () => {
+  // The token must sit in the path or query — matching the hostname would
+  // accuse every link on the sender's own numbered subdomain.
+  const headers = parseHeaders([
+    'From: news@sender.example',
+    'Feedback-ID: em1234567890:c:n:e',
+  ].join('\n'));
+  const card = analyseBody(
+    htmlPart('<a href="https://em1234567890.sender.example/plain">read</a>'),
+    { headers },
+  ).find((f) => f.id === 'body-tracking');
+  assert.equal(card?.items.some((i) => /recurs inside/.test(i.label)) ?? false, false);
+});
+
+test('a wordlike segment without digits never qualifies as an id', () => {
+  const headers = parseHeaders([
+    'From: news@sender.example',
+    'Feedback-ID: newsletterweekly:campaign:news:esp',
+  ].join('\n'));
+  const card = analyseBody(
+    htmlPart('<a href="https://x.example/read/newsletterweekly">read</a>'),
+    { headers },
+  ).find((f) => f.id === 'body-tracking');
+  assert.equal(card?.items.some((i) => /recurs inside/.test(i.label)) ?? false, false);
+});
+
+test('hex tokens of digest length are offered to the hash bridge', () => {
+  const card = trackingCard(htmlPart(
+    `<a href="https://t.example/u/${'ab12'.repeat(16)}">read</a>`,
+  ));
+  assert.ok(card.hashCheck, 'the card carries candidates');
+  assert.equal(card.hashCheck.tokens[0].token, 'ab12'.repeat(16));
+  assert.ok(card.hashCheck.addresses.includes('maja.beispiel@example.org'));
+});
+
+test('hex inside a longer hex run is not a candidate', () => {
+  const card = trackingCard(htmlPart(
+    `<a href="https://t.example/u/${'a'.repeat(128)}">read</a><img src="https://t.example/p.gif" width="1" height="1">`,
+  ));
+  assert.equal(card.hashCheck, null);
+});
+
+test('a body with no tracking shape at all yields no tracking card', () => {
+  assert.equal(trackingCard(htmlPart('<p>Just prose, no links, no images.</p>')), undefined);
 });
 
 // ------------------------------------------------- the rendering invariants

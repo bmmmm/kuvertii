@@ -5,6 +5,7 @@ import { checkHost } from './blocklist.js';
 import { verdictRows } from './snapshot.js';
 import { analyseBody } from './body.js';
 import { neutralise } from './control.js';
+import { hashedAddressRows } from './emailhash.js';
 import { analyse } from './findings.js';
 import { parseParts, splitMessage } from './mime.js';
 import { clippedNote, MAX_HEADER_BYTES, readHeaders } from './unfold.js';
@@ -94,6 +95,15 @@ async function appendBlocklistVerdict(list, hosts) {
   for (const row of verdictRows(results)) list.append(renderItem(row));
 }
 
+/**
+ * Append address-hash verdicts — the same bridge shape as the blocklist:
+ * the analysis collected candidate tokens synchronously, the digests run
+ * here, on crypto.subtle, and only rows that say something are appended.
+ */
+async function appendHashVerdict(list, hashCheck) {
+  for (const row of await hashedAddressRows(hashCheck)) list.append(renderItem(row));
+}
+
 function run() {
   const pasted = input.value;
   results.replaceChildren();
@@ -130,7 +140,7 @@ function run() {
   }
   const { parts, notes } = bodyRead;
 
-  const findings = [...analyse(headers), ...analyseBody(parts, { bodyOnly })];
+  const findings = [...analyse(headers), ...analyseBody(parts, { headers, bodyOnly })];
   if (!headers.length && !findings.length) {
     emptyState.hidden = false;
     status.textContent = `Nothing here parsed as a header block.${clipped}`;
@@ -155,6 +165,15 @@ function run() {
   for (const finding of findings) {
     const { card, list } = renderFinding(finding);
     results.append(card);
+    if (finding.hashCheck) {
+      appendHashVerdict(list, finding.hashCheck).catch((error) => {
+        list.append(renderItem({
+          label: 'The address-hash check did not complete',
+          value: `Whether these ids encode your address went unchecked, so treat them as unchecked rather than clean. (${error.message})`,
+          level: 'caution',
+        }));
+      });
+    }
     if (finding.hostsToCheck?.length) {
       appendBlocklistVerdict(list, finding.hostsToCheck).catch((error) => {
         // Not "rendered inline as unavailable", which is what the comment here

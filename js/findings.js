@@ -350,6 +350,24 @@ function readerAddresses(headers) {
   return reader;
 }
 
+/**
+ * Every address known to belong to this message's recipient side.
+ *
+ * The union the body analysis needs: what the sender wrote into the
+ * recipient fields plus what the receiving side stamped on delivery. A body
+ * link carrying one of these — open, encoded, or hashed — identifies the
+ * reader, and that comparison cannot be made without this set.
+ */
+export function knownRecipientAddresses(headers) {
+  const known = new Set(readerAddresses(headers));
+  for (const field of RECIPIENT_FIELDS) {
+    for (const value of getAll(headers, field)) {
+      findAddresses(value).forEach((address) => known.add(address));
+    }
+  }
+  return [...known];
+}
+
 // ---------------------------------------------------------------- recipients
 
 function recipientFinding(headers) {

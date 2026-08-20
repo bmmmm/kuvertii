@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { lookup, validate, verdictRows } from '../js/snapshot.js';
 import { analyseBody } from '../js/body.js';
 import { clearClipboard, readClipboard } from '../js/clipboard.js';
+import { hashedAddressRows } from '../js/emailhash.js';
 import { analyse } from '../js/findings.js';
 import { createKeyReader, isQuit, untilQuit } from '../js/keys.js';
 import { parseParts, splitMessage } from '../js/mime.js';
@@ -117,7 +118,7 @@ async function report(text, renderer, out = process.stdout, { headersOnly = fals
   }
   const { parts, notes } = bodyRead;
 
-  const findings = [...analyse(headers), ...analyseBody(parts, { bodyOnly })];
+  const findings = [...analyse(headers), ...analyseBody(parts, { headers, bodyOnly })];
   if (!headers.length && !findings.length) {
     out.write(`${renderer.paint('\x1b[33m', `Nothing here parsed as a header block.${clipped}`)}\n`);
     return false;
@@ -131,7 +132,13 @@ async function report(text, renderer, out = process.stdout, { headersOnly = fals
     let rendered = finding;
     if (finding.hostsToCheck?.length) {
       const extra = blocklistItems(await checkHosts(finding.hostsToCheck));
-      rendered = { ...finding, items: [...finding.items, ...extra] };
+      rendered = { ...rendered, items: [...rendered.items, ...extra] };
+    }
+    // The address-hash bridge — same shape as the blocklist one: the analysis
+    // collected candidates synchronously, the digests happen here.
+    if (finding.hashCheck) {
+      const extra = await hashedAddressRows(finding.hashCheck);
+      if (extra.length) rendered = { ...rendered, items: [...rendered.items, ...extra] };
     }
     out.write(`${renderer.renderFinding(rendered)}\n`);
   }
