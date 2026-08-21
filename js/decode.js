@@ -289,23 +289,34 @@ export function decodeQuotedPrintable(text) {
 }
 
 export function decodeEncodedWords(text) {
-  return String(text).replace(
-    /=\?([^?]+)\?([BQbq])\?([^?]*)\?=/g,
-    (whole, charset, encoding, payload) => {
-      try {
-        const bytes =
-          encoding.toUpperCase() === 'B'
-            ? Uint8Array.from(atob(payload), (c) => c.charCodeAt(0))
-            : Uint8Array.from(
-                decodeQuotedPrintable(payload.replace(/_/g, ' ')),
-                (c) => c.charCodeAt(0),
-              );
-        return new TextDecoder(charset.toLowerCase(), { fatal: false }).decode(bytes);
-      } catch {
-        return whole;
-      }
-    },
-  );
+  // RFC 2047 §6.2: whitespace separating two adjacent encoded-words is removed
+  // on display — it is there only so a long run can be split across words (and
+  // folded lines), not to insert a space. Whitespace between an encoded-word and
+  // ordinary text is kept, so the collapse is anchored to `?=…=?` and touches
+  // nothing else. Without it every reader saw a space no mail client shows:
+  // `caf =?…?=` rendered `café` as `caf é`, a split filename `report.ex` + `e`
+  // read as `report.ex e` so the `.exe` check went silent on a file the client
+  // runs as `report.exe`, and a split address `ali` + `ce=40x.org` decoded to
+  // `ali ce@x.org` — the wrong recipient found, the real one missed.
+  return String(text)
+    .replace(/\?=\s+=\?/g, '?==?')
+    .replace(
+      /=\?([^?]+)\?([BQbq])\?([^?]*)\?=/g,
+      (whole, charset, encoding, payload) => {
+        try {
+          const bytes =
+            encoding.toUpperCase() === 'B'
+              ? Uint8Array.from(atob(payload), (c) => c.charCodeAt(0))
+              : Uint8Array.from(
+                  decodeQuotedPrintable(payload.replace(/_/g, ' ')),
+                  (c) => c.charCodeAt(0),
+                );
+          return new TextDecoder(charset.toLowerCase(), { fatal: false }).decode(bytes);
+        } catch {
+          return whole;
+        }
+      },
+    );
 }
 
 /** Every email address inside a string, deduplicated, lowercased. */

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { decodeCandidates, findAddresses, readability } from '../js/decode.js';
+import { decodeCandidates, decodeEncodedWords, findAddresses, readability } from '../js/decode.js';
 import { clippedNote, get, getAll, MAX_HEADER_BYTES, parseHeaders, readHeaders, skippedNote } from '../js/unfold.js';
 import {
   BULK_HEADER, CAMPAIGN_SEGMENT, MAILER_SEGMENT, RECIPIENT, UNSUB_TOKEN,
@@ -210,4 +210,29 @@ test('a percent-encoded address is an encoded copy like any other', () => {
 
 test('a malformed percent sequence decodes to nothing', () => {
   assert.deepEqual(decodeCandidates('discount%ZZoffer%2'), []);
+});
+
+test('adjacent encoded-words join without the whitespace a client removes', () => {
+  // RFC 2047 §6.2: whitespace between two adjacent encoded-words exists only to
+  // let a long run be split across words (and folded lines), and is removed on
+  // display. Keeping it rendered `café` as `caf é` on ordinary mail, and let a
+  // sender split a token across two words to slip past a check that reads the
+  // end of the string: a dangerous filename `report.ex` + `e` read as
+  // `report.ex e` so the `.exe` check saw nothing while a client saves and runs
+  // `report.exe`; a hidden address `ali` + `ce=40x.org` decoded to `ali ce@x.org`,
+  // the wrong recipient found and the real one missed.
+  const enc = (s) => Buffer.from(s, 'utf8').toString('base64');
+  assert.equal(decodeEncodedWords(`=?utf-8?B?${enc('caf')}?= =?utf-8?B?${enc('é')}?=`), 'café');
+  assert.equal(decodeEncodedWords('=?utf-8?Q?M=C3=BC?= =?utf-8?Q?ller?='), 'Müller');
+  assert.equal(decodeEncodedWords(`=?utf-8?B?${enc('report.ex')}?=\t=?utf-8?B?${enc('e')}?=`), 'report.exe', 'a tab counts too');
+  assert.deepEqual(
+    findAddresses(decodeEncodedWords('=?utf-8?Q?ali?= =?utf-8?Q?ce=40example.org?=')),
+    ['alice@example.org'],
+  );
+
+  // The boundary: whitespace between an encoded-word and ordinary text is kept —
+  // only the whitespace between two encoded-words is removed. A blanket collapse
+  // would glue apart words a client keeps apart.
+  assert.equal(decodeEncodedWords(`=?utf-8?B?${enc('Hallo')}?= Welt`), 'Hallo Welt');
+  assert.equal(decodeEncodedWords(`Von =?utf-8?B?${enc('Müller')}?=`), 'Von Müller');
 });

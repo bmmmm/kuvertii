@@ -315,6 +315,19 @@ function neutraliseDisabledByMutation(text) {
   },
 
   {
+    id: "encoded-word-whitespace-kept",
+    promise: "Whitespace between two adjacent encoded-words is removed, as a client removes it.",
+    file: "js/decode.js",
+    find: "    .replace(/\\?=\\s+=\\?/g, '?==?')",
+    replace: "    .replace(/\\?=\\s+=\\?/g, '?= =?')",
+    mustKill: [
+      "adjacent encoded-words join without the whitespace a client removes",
+    ],
+    // RFC 2047 §6.2. Keeping the space rendered café as `caf é` and let a
+    // dangerous filename or a hidden address be split across two words.
+  },
+
+  {
     id: "percent-encoding-unknown",
     promise: "The encoding every click tracker uses is one this tool reads.",
     file: "js/decode.js",
