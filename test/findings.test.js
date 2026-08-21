@@ -1169,6 +1169,44 @@ test('every verdict passing with no bad row keeps the all-clear headline', () =>
   assert.equal(card.title, ALL_CLEAR_TITLE, 'so the all-clear headline stands');
 });
 
+test('a decisive verdict spelled with a space around = is still read as a failure', () => {
+  // RFC 8601 §2.2: methodspec is `method [CFWS] "=" [CFWS] result`, so the space
+  // is legal. A bare-`=` scanner missed `dkim = fail`, and because the missed
+  // verdict was decisive, the two that remained earned "every check passed"
+  // printed over a failure the card never showed — the cardinal error (a false
+  // reassurance), reachable with one space. No real message uses the spacing,
+  // which is why 432 fixtures never caught it; the reproduction did.
+  const auth = (ar) => analyse(parseHeaders(
+    `From: "PayPal" <service@paypal.com>\nAuthentication-Results: ${ar}\n`
+    + 'Received: from mail.paypal.com by mx.icloud.example; Mon, 17 Aug 2026 10:00:00 +0000',
+  )).find((f) => f.id === 'auth');
+
+  for (const spacing of ['dkim = fail', 'dkim\t=\tfail', 'dkim =fail', 'dkim= fail']) {
+    const card = auth(`mx.icloud.example; spf=pass; ${spacing}; dmarc=pass`);
+    assert.notEqual(card.title, ALL_CLEAR_TITLE, `"${spacing}" must lose the headline`);
+    assert.ok(
+      card.items.some((i) => i.level === 'bad' && /DKIM = fail/.test(i.label)),
+      `"${spacing}" must print a DKIM = fail row`,
+    );
+  }
+
+  // compauth and its reason code ride the same gap: a spaced compauth=fail, or a
+  // spaced bad reason under a passing compauth, must still deny the headline.
+  const composite = auth('mx; spf=pass; dkim=pass; dmarc=pass; compauth = fail reason=000');
+  assert.ok(composite.items.some((i) => i.level === 'bad'), 'compauth = fail is a bad row');
+  assert.notEqual(composite.title, ALL_CLEAR_TITLE);
+
+  const spacedReason = auth('mx; spf=pass; dkim=pass; dmarc=pass; compauth=pass reason = 000');
+  assert.ok(spacedReason.items.some((i) => i.level === 'bad'), 'reason = 000 is a bad row');
+  assert.notEqual(spacedReason.title, ALL_CLEAR_TITLE);
+
+  // Scalpel, not hammer: the ordinary space-free all-pass header is unchanged —
+  // the widened `=` must not have started swallowing the next token as a verdict.
+  const clean = auth('mx.icloud.example; spf=pass; dkim=pass; dmarc=pass');
+  assert.equal(clean.title, ALL_CLEAR_TITLE, 'the space-free all-pass headline still stands');
+  assert.ok(!clean.items.some((i) => i.level === 'bad'), 'and nothing on it is bad');
+});
+
 test('a score that is not a score is not read as the worst one', () => {
   // Both Microsoft scores were read with `Number()` and then walked down a
   // chain of `<=`. Every comparison against NaN is false, so a field holding

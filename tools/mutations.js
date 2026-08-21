@@ -577,6 +577,39 @@ function el(tag, className, text) {
   },
 
   {
+    id: 'verdict-cfws-hides-fail',
+    promise: 'A decisive verdict is read whether or not a space sits around its `=`.',
+    file: 'js/findings.js',
+    find: `    for (const [, mechanism, verdict] of field.value.matchAll(/\\b(spf|dkim|dmarc|arc|bimi)[ \\t]*=[ \\t]*(\\w+)/gi)) {`,
+    replace: `    for (const [, mechanism, verdict] of field.value.matchAll(/\\b(spf|dkim|dmarc|arc|bimi)=(\\w+)/gi)) {`,
+    mustKill: ['a decisive verdict spelled with a space around = is still read as a failure'],
+    // RFC 8601 allows CFWS around `=`; the bare-`=` scanner missed `dkim = fail`
+    // and headlined all-clear over it.
+  },
+
+  {
+    id: 'compauth-cfws-hides-fail',
+    promise: 'compauth is read whether or not a space sits around its `=`.',
+    file: 'js/findings.js',
+    find: `  const compauth = results.match(/\\bcompauth[ \\t]*=[ \\t]*(\\w+)/i)?.[1]?.toLowerCase();`,
+    replace: `  const compauth = results.match(/\\bcompauth=(\\w+)/i)?.[1]?.toLowerCase();`,
+    mustKill: ['a decisive verdict spelled with a space around = is still read as a failure'],
+    // `compauth = fail` written no bad row, and its absence let the headline read
+    // all-clear over a composite failure.
+  },
+
+  {
+    id: 'reason-cfws-hides-bad-code',
+    promise: 'A compauth reason code is read whether or not a space sits around its `=`.',
+    file: 'js/findings.js',
+    find: `    const code = results.match(/\\breason[ \\t]*=[ \\t]*(\\d{3})/i)?.[1];`,
+    replace: `    const code = results.match(/\\breason=(\\d{3})/i)?.[1];`,
+    mustKill: ['a decisive verdict spelled with a space around = is still read as a failure'],
+    // The round-9 defect (a bad reason row denies the headline) returning through
+    // the CFWS gap: `reason = 000` wrote no row, so the headline went all-clear.
+  },
+
+  {
     id: 'score-falls-through-to-the-worst-branch',
     promise: 'A score field that holds no score is not read as the highest one.',
     file: 'js/microsoft.js',

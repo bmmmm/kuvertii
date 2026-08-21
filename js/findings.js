@@ -1225,7 +1225,13 @@ function authFinding(headers) {
 
   for (const field of resultFields) {
     const below = lastHop !== -1 && headers.indexOf(field) > lastHop;
-    for (const [, mechanism, verdict] of field.value.matchAll(/\b(spf|dkim|dmarc|arc|bimi)=(\w+)/gi)) {
+    // RFC 8601 §2.2 methodspec is `method [CFWS] "=" [CFWS] result`, so the
+    // space around `=` is legal and a bare-`=` regex misses `dkim = fail`. That
+    // is not merely under-reading: the missed verdict is a DECISIVE fail, so the
+    // two that remain earn "every check passed" printed over a failure the card
+    // never showed. Tabs and spaces only — `results` below joins fields on \n,
+    // and \s would let a mechanism reach across that seam into the next field.
+    for (const [, mechanism, verdict] of field.value.matchAll(/\b(spf|dkim|dmarc|arc|bimi)[ \t]*=[ \t]*(\w+)/gi)) {
       const key = mechanism.toLowerCase();
       if (verdicts[key]) continue;
       verdicts[key] = verdict.toLowerCase();
@@ -1393,7 +1399,10 @@ function authFinding(headers) {
   // scanner above, which only knows the five RFC names — and on M365 mail this
   // is the field recording what the receiver concluded about the sender's
   // identity, after weighing SPF, DKIM, DMARC and the message together.
-  const compauth = results.match(/\bcompauth=(\w+)/i)?.[1]?.toLowerCase();
+  // CFWS around `=` for the same reason as the mechanism scanner: `compauth =
+  // fail` writes no bad row, and its absence is what lets the headline read
+  // all-clear over a composite failure. Tabs and spaces only, not \s.
+  const compauth = results.match(/\bcompauth[ \t]*=[ \t]*(\w+)/i)?.[1]?.toLowerCase();
   if (compauth) {
     items.push({
       label: `Composite authentication = ${compauth}`,
@@ -1406,7 +1415,10 @@ function authFinding(headers) {
       note: 'Microsoft\'s own judgement rather than any RFC\'s. On mail through Microsoft 365 it is the verdict that decided delivery.',
     });
 
-    const code = results.match(/\breason=(\d{3})/i)?.[1];
+    // `reason = 000` is the round-9 defect returning through the CFWS gap: a bad
+    // reason row denied the all-clear headline, but only when the space-free
+    // spelling let the row exist. Tabs and spaces only, not \s.
+    const code = results.match(/\breason[ \t]*=[ \t]*(\d{3})/i)?.[1];
     const known = code && (COMPAUTH_REASONS[code] ?? COMPAUTH_CLASSES[code[0]]);
     if (known) {
       items.push({
