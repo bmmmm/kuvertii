@@ -161,6 +161,32 @@ test('an ordinary Gmail message id is not a hidden address', () => {
   assert.deepEqual(candidates, [], 'bytes that are not text were not that encoding');
 });
 
+test('a printable-ASCII =XX in an opaque id is not a hidden recipient', () => {
+  // The =8b fix rejected one byte — an invalid-UTF-8 one — and left the whole
+  // printable-ASCII range open. =41 -> 'A', =2E -> '.', =5F -> '_', =2B -> '+',
+  // =2D -> '-' are valid UTF-8 and land in the address local-part class, so a
+  // Gmail-style Message-ID <CAE=41…@mail.gmail.com> decoded to a *different*
+  // local part and was announced as a recipient "recovered by decoding", the
+  // card's strongest wording, on ordinary mail. Two of 25 real messages hit it
+  // through DKIM-Signature, whose base64 is full of `=` padding followed by two
+  // hex digits. Quoted-printable never escapes printable ASCII (RFC 2045 §6.7),
+  // so a lone such escape is not that encoding — it is base64, or a literal `=`.
+  for (const esc of ['41', '2E', '5f', '2b', '2d', '30', '25', '7e']) {
+    const id = `<CAE=${esc}d3f9a0c1e2d4b5a6c7e8@mail.gmail.com>`;
+    assert.deepEqual(
+      decodeCandidates(id).filter((c) => c.score >= 0.5), [],
+      `=${esc} adjacent to @mail.gmail.com is a coincidence, not quoted-printable`,
+    );
+  }
+
+  // The positive control, and the boundary the fix rides on: an escape carrying
+  // a byte quoted-printable exists to carry (0x80..0xFF) still decodes, because
+  // that is the only thing a header ever legitimately quoted-printable-encodes.
+  const [genuine] = decodeCandidates('Gr=C3=BC=C3=9Fe von M=C3=BCller');
+  assert.equal(genuine.text, 'Grüße von Müller');
+  assert.equal(genuine.method, 'quoted-printable');
+});
+
 test('genuine quoted-printable decodes to the text it encodes', () => {
   // The same strictness that refuses the coincidence above earns this: the
   // bytes are reassembled as UTF-8 instead of being handed over one character

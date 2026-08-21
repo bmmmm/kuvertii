@@ -15,6 +15,20 @@ const EMAIL_RE = /(?<![A-Z0-9._%+-])[A-Z0-9._%+-]{1,64}@[A-Z0-9-]{1,63}(?:\.[A-Z
 const DOMAIN_RE = /\b[A-Z0-9-]+\.(?:[A-Z]{2,}\.)?[A-Z]{2,}\b/i;
 const WORD_RE = /[A-Za-z]{4,}/;
 
+// A `=XX` escape is quoted-printable only when the byte is one QP is there to
+// carry: 0x80..0xFF. RFC 2045 §6.7 leaves printable ASCII (0x21..0x7E, bar `=`)
+// bare, so a conformant encoder never writes `=41`, `=2E`, `=5F`, `=2B`. A lone
+// one of those is not an encoding — it is base64 padding followed by two hex
+// digits, or a literal `=`, sitting inside a message-id or DKIM signature that
+// already ends in `@domain`. Reading it as QP rewrites one character of that
+// opaque token and leaves the `@domain` — legible all along — in place, so the
+// address that falls out is announced as a recipient "recovered by decoding"
+// when nothing was hidden. Two of 25 real messages hit this through
+// DKIM-Signature. The strictness of `textFromBytes` then still applies: a high
+// byte that is not valid UTF-8 (`=8b` in a Gmail id) is refused as before, and
+// a genuine `=C3=BC` (0xC3 0xBC = ü) has its high bytes and survives.
+const QP_HIGH_BYTE_RE = /=[89A-F][0-9A-F]/i;
+
 // Reversed text is still a syntactically valid address — `gro.elpmaxe@…` parses
 // exactly as well as `…@example.org`. A short list of real TLDs is what breaks
 // the tie and tells us which way round we are holding the string.
@@ -154,7 +168,7 @@ export function decodeCandidates(value) {
   // render, but header dumps show raw.
   if (/=\?[^?]+\?[BQbq]\?/.test(raw)) {
     offer(decodeEncodedWords(raw), 'RFC 2047 encoded-word');
-  } else if (/=[0-9A-F]{2}/i.test(raw)) {
+  } else if (QP_HIGH_BYTE_RE.test(raw)) {
     offer(textFromBytes(decodeQuotedPrintable(raw)), 'quoted-printable');
   }
 

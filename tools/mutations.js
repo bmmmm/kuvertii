@@ -302,6 +302,19 @@ function neutraliseDisabledByMutation(text) {
   },
 
   {
+    id: "qp-decodes-printable-ascii-escape",
+    promise: "A lone printable-ASCII =XX in an opaque id is not quoted-printable.",
+    file: "js/decode.js",
+    find: "  } else if (QP_HIGH_BYTE_RE.test(raw)) {",
+    replace: "  } else if (/=[0-9A-F]{2}/i.test(raw)) {",
+    mustKill: [
+      "a printable-ASCII =XX in an opaque id is not a hidden recipient",
+    ],
+    // The =8b fix rejected an invalid-UTF-8 byte and left =41, =2E, =5F, =2B
+    // open; real DKIM base64 (=` padding + two hex) manufactured a recipient.
+  },
+
+  {
     id: "percent-encoding-unknown",
     promise: "The encoding every click tracker uses is one this tool reads.",
     file: "js/decode.js",
