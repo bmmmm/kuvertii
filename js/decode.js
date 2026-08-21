@@ -311,7 +311,17 @@ export function decodeEncodedWords(text) {
                   decodeQuotedPrintable(payload.replace(/_/g, ' ')),
                   (c) => c.charCodeAt(0),
                 );
-          return new TextDecoder(charset.toLowerCase(), { fatal: false }).decode(bytes);
+          // RFC 2231 §5 decorates the charset with a language tag —
+          // `=?utf-8*en?B?…?=` — and a conformant client drops the `*en` and
+          // decodes as utf-8. `TextDecoder('utf-8*en')` throws, so without this
+          // the whole word was returned raw: a subject rendered as its own
+          // gibberish, and — the reason this is a fix and not fidelity — the
+          // filename `=?utf-8*en?B?<report.exe>?=` never became `report.exe`, so
+          // the executable check ran on a string ending in `?=` and the
+          // attachment card went silent on a file the client runs. Stripping the
+          // tag only ever exposes what a real reader already sees.
+          const label = charset.toLowerCase().split('*')[0];
+          return new TextDecoder(label, { fatal: false }).decode(bytes);
         } catch {
           return whole;
         }

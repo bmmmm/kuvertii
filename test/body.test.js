@@ -482,6 +482,53 @@ test('a name the OS strips to an executable is not read as harmless', () => {
   }
 });
 
+test('a language-tagged encoded-word filename is decoded before the danger check', () => {
+  // RFC 2231 §5 lets a sender decorate the charset with a language tag —
+  // `=?utf-8*en?B?…?=` — and a conformant client drops the `*en` and decodes the
+  // word. kuvertii's `TextDecoder('utf-8*en')` threw, so the word was kept raw: a
+  // filename encoding `report.exe` stayed `=?utf-8*en?B?…?=`, the `$`-anchored
+  // executable check saw a string ending in `?=`, and the card went silent on a
+  // file the client saves and runs as report.exe — the cardinal direction, and
+  // the same crying-wolf class the plain encoded-word already covered, one tag
+  // over. Driven through the real parseParts → analyseBody path, not a pre-set
+  // filename, because the gap is in the decoding of the header field itself.
+  const enc = (s) => Buffer.from(s, 'utf8').toString('base64');
+  const cardFor = (filenameField) => {
+    const { headerText, bodyText } = splitMessage([
+      'Content-Type: multipart/mixed; boundary="B"',
+      '',
+      '--B',
+      'Content-Type: text/plain',
+      '',
+      'See attached.',
+      '--B',
+      'Content-Type: application/octet-stream',
+      `Content-Disposition: attachment; filename="${filenameField}"`,
+      'Content-Transfer-Encoding: base64',
+      '',
+      'AAAAAA==',
+      '--B--',
+    ].join('\n'));
+    const { parts } = parseParts(parseHeaders(headerText), bodyText);
+    return analyseBody(parts).find((f) => f.id === 'attachments');
+  };
+
+  for (const field of [
+    `=?utf-8*en?B?${enc('report.exe')}?=`,
+    `=?UTF-8*de?B?${enc('rechnung.pdf.scr')}?=`,
+    '=?utf-8*en?Q?update.bat?=',
+  ]) {
+    const card = cardFor(field);
+    assert.equal(card.items[0].level, 'bad', `${JSON.stringify(field)} decodes to an executable`);
+  }
+
+  // The boundary, both ways. A safe name under a language tag is not newly
+  // accused, and a genuinely unknown charset (no tag to strip) is still left raw
+  // rather than force-decoded into a wrong reading.
+  assert.equal(cardFor(`=?utf-8*en?B?${enc('notes.txt')}?=`).items[0].level, null, 'a safe name stays quiet');
+  assert.equal(cardFor(`=?utf-8?B?${enc('report.exe')}?=`).items[0].level, 'bad', 'the plain form still fires');
+});
+
 test('a declared PDF whose first bytes are a program is code, said plainly', () => {
   const card = attachmentCard(attachment({ head: [0x4d, 0x5a, 0x90, 0x00] }));
   const row = card.items[0];

@@ -328,6 +328,21 @@ function neutraliseDisabledByMutation(text) {
   },
 
   {
+    id: "encoded-word-language-tag-unstripped",
+    promise: "An RFC 2231 language tag on the charset does not stop the word decoding.",
+    file: "js/decode.js",
+    find: "          const label = charset.toLowerCase().split('*')[0];",
+    replace: "          const label = charset.toLowerCase();",
+    mustKill: [
+      "a language-tagged encoded-word filename is decoded before the danger check",
+      "an encoded-word with an RFC 2231 language tag is still decoded",
+    ],
+    // RFC 2231 §5. `TextDecoder('utf-8*en')` throws, so the raw word was kept —
+    // a filename =?utf-8*en?B?<report.exe>?= stayed opaque and the executable
+    // check went silent on a file a client runs.
+  },
+
+  {
     id: "percent-encoding-unknown",
     promise: "The encoding every click tracker uses is one this tool reads.",
     file: "js/decode.js",

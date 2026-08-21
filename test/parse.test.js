@@ -236,3 +236,30 @@ test('adjacent encoded-words join without the whitespace a client removes', () =
   assert.equal(decodeEncodedWords(`=?utf-8?B?${enc('Hallo')}?= Welt`), 'Hallo Welt');
   assert.equal(decodeEncodedWords(`Von =?utf-8?B?${enc('Müller')}?=`), 'Von Müller');
 });
+
+test('an encoded-word with an RFC 2231 language tag is still decoded', () => {
+  // RFC 2231 §5 decorates the charset with a language tag — `=?utf-8*en?B?…?=` —
+  // and a conformant client drops the `*en` and decodes as utf-8.
+  // `TextDecoder('utf-8*en')` throws, so the whole word was returned raw: a
+  // subject rendered as its own gibberish, and a hidden address or filename
+  // never decoded, so the disclosure and attachment checks read the raw word
+  // and saw nothing. Same class as the attachment test in body.test.js, at the
+  // decode layer that feeds every consumer.
+  const enc = (s) => Buffer.from(s, 'utf8').toString('base64');
+  assert.equal(decodeEncodedWords(`=?utf-8*en?B?${enc('café')}?=`), 'café', 'fidelity: the tag is dropped');
+  assert.equal(decodeEncodedWords(`=?UTF-8*de?Q?Gr=C3=BC=C3=9Fe?=`), 'Grüße', 'case and Q-encoding too');
+  assert.deepEqual(
+    findAddresses(decodeEncodedWords(`=?utf-8*en?Q?ali?= =?utf-8*en?Q?ce=40example.org?=`)),
+    ['alice@example.org'],
+    'a hidden address split across two tagged words still joins',
+  );
+
+  // The boundary: a genuinely unknown charset has no tag to strip and nothing
+  // safe to decode to, so it is left raw rather than force-decoded into a wrong
+  // reading. Stripping only ever recovers a charset that exists.
+  assert.equal(
+    decodeEncodedWords('=?x-not-a-charset?B?aGVsbG8=?='),
+    '=?x-not-a-charset?B?aGVsbG8=?=',
+    'an unknown charset is left as written',
+  );
+});
