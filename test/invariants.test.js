@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { ALL_CLEAR_TITLE, analyse } from '../js/findings.js';
+import { createRenderer } from '../js/terminal.js';
 import { parseHeaders } from '../js/unfold.js';
 import { authCombinations, compauthCombinations, DECISIVE } from './verdicts.js';
 
@@ -84,4 +85,51 @@ test('no combination of verdicts makes the analysis throw', () => {
     const faults = analyse(parseHeaders(header)).filter((f) => String(f.id).startsWith('fault:'));
     assert.deepEqual(faults, [], `a producer threw on ${JSON.stringify(verdicts)}`);
   }
+});
+
+// Fields whose values this tool decodes rather than merely prints. Everything
+// a decoder can invent has to come out of one of these.
+const DECODED_FIELDS = [
+  'X-Mailer-Info', 'X-Mailer-Info-Extra', 'List-Unsubscribe', 'Feedback-Id',
+  'X-Campaign-Id', 'Return-Path', 'X-SG-EID',
+];
+
+/** An opaque blob of the kind every bulk sender stamps — bytes, deterministically. */
+const blob = (seed, length) => Buffer.from(
+  Uint8Array.from({ length }, (_, i) => (i * seed + 11) % 256),
+).toString('base64');
+
+test('a decode the tool could not read is never put on screen', () => {
+  // U+FFFD is the one character on a report that can only have come from this
+  // tool: TextDecoder emits it where the bytes were not UTF-8, which is the
+  // decoder saying it failed. So if the header carries none, no rendered line
+  // may carry one either — a property of the output, checkable without reading
+  // a word of it, and true of every message rather than of a chosen fixture.
+  //
+  // What it would have caught: a Klaviyo X-Mailer-Info folded mid-token. Half a
+  // base64 token decodes to noise; the noise counted its replacement characters
+  // as printable, scored 0.52 as prose, and was printed to the reader as
+  // campaign metadata. Then the stray control bytes that come with random data
+  // were read as intent, and an ordinary newsletter was headlined as a
+  // deliberate attempt to control the reader's terminal.
+  const offenders = [];
+
+  for (const field of DECODED_FIELDS) {
+    for (const seed of [7, 13, 37, 91, 137]) {
+      for (const length of [24, 48, 96, 192]) {
+        const token = blob(seed, length);
+        // Folded and whole: the fold is what cuts a token in half, and half a
+        // token is what decodes to bytes.
+        for (const value of [token, `${token.slice(0, 40)}\n ${token.slice(40)}`]) {
+          const header = `From: Sender <s@sender.example>\nTo: you@example.org\n${field}: ${value}\n`;
+          const rendered = createRenderer({ colour: false, width: 80 }).render(analyse(parseHeaders(header)));
+          if (rendered.includes('\uFFFD')) {
+            offenders.push(`${field} seed=${seed} len=${length}${value.includes('\n') ? ' folded' : ''}`);
+          }
+        }
+      }
+    }
+  }
+
+  assert.deepEqual(offenders.slice(0, 5), [], `${offenders.length} render(s) printed a failed decode`);
 });

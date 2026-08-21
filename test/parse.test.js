@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { decodeCandidates, decodeEncodedWords, findAddresses, readability } from '../js/decode.js';
+import { decodeCandidates, decodeEncodedWords, decodeSegments, findAddresses, readability } from '../js/decode.js';
 import { clippedNote, get, getAll, MAX_HEADER_BYTES, parseHeaders, readHeaders, skippedNote } from '../js/unfold.js';
 import {
   BULK_HEADER, CAMPAIGN_SEGMENT, MAILER_SEGMENT, RECIPIENT, UNSUB_TOKEN,
 } from './fixtures.js';
+
+/** The senders' own transform is reversal; the tests build their input the same way. */
+const reverse = (text) => [...text].reverse().join('');
 
 test('folded continuation lines are joined into one value', () => {
   const headers = parseHeaders(BULK_HEADER);
@@ -52,6 +55,55 @@ test('the unsubscribe token yields the recipient and the campaign', () => {
   const [best] = decodeCandidates(UNSUB_TOKEN);
   assert.ok(best.text.includes(RECIPIENT));
   assert.ok(best.text.includes('newsletter00news20260817'));
+});
+
+test('a fold inside a token does not hide what it carries', () => {
+  // Unfolding removes the line break, not the space that came with it, and a
+  // mailer folds at a fixed width rather than at its own separators — so the
+  // fold lands mid-token on any value long enough. Splitting on whitespace then
+  // handed the decoder two halves of a base64 token: the address in it went
+  // unreported, and the noise the halves decoded to was printed in its place.
+  //
+  // Shaped after a real Klaviyo X-Mailer-Info, with this suite's invented
+  // address and the sender's own transform: the plaintext reversed, base64'd,
+  // and the whole string reversed again.
+  const token = reverse(Buffer.from(reverse(RECIPIENT)).toString('base64'));
+  const cut = Math.floor(token.length / 2);
+  const folded = parseHeaders(`X-Mailer-Info: 10.${token.slice(0, cut)}\n ${token.slice(cut)}\n`);
+
+  const found = decodeSegments(get(folded, 'X-Mailer-Info')).map((c) => c.text);
+  assert.ok(found.includes(RECIPIENT), `the fold hid the address: ${JSON.stringify(found)}`);
+});
+
+test('whitespace that separates two tokens still reads as a separator', () => {
+  // The other half of the same question. Nothing in the value says whether a
+  // space is a fold or a separator, so the answer has to come from what the two
+  // readings decode to: a separator leaves both sides readable on their own,
+  // a fold leaves at least one side holding part of a token. Reading this pair
+  // as one token yields both addresses run together into a single line.
+  const encode = (text) => reverse(Buffer.from(reverse(text)).toString('base64'));
+  const pair = `${encode(RECIPIENT)} ${encode('newsletter@example.org')}`;
+
+  const found = decodeSegments(pair).map((c) => c.text);
+  assert.deepEqual(found.sort(), [RECIPIENT, 'newsletter@example.org'].sort());
+});
+
+test('bytes that are not text do not become text by being printed', () => {
+  // What a reader was shown: replacement characters and control bytes, in rows
+  // captioned as campaign metadata, under a headline calling their newsletter a
+  // deliberate attempt to control their terminal.
+  //
+  // U+FFFD is what TextDecoder emits where the bytes were not UTF-8 — the
+  // decoder's verdict on its own output — and counting it as an ordinary
+  // printable character was enough to carry noise over the line. Three invalid
+  // bytes and then a word is the shape a half-token has: mostly text, and not
+  // text. Counted as printable, this scored 0.55 against a threshold of 0.5.
+  const noise = Buffer.concat([
+    Buffer.from([0xb4, 0x8f, 0x9c]), Buffer.from('campaign2026x'),
+  ]).toString('base64');
+  const [best] = decodeCandidates(noise);
+
+  assert.ok(!best || !best.text.includes('\uFFFD'), `mojibake scored as readable: ${JSON.stringify(best)}`);
 });
 
 test('high-entropy blobs are not reported as decoded text', () => {

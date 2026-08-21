@@ -113,6 +113,14 @@ async function auditOne(raw) {
     const vis = stripAnsi(out);
     const cb = vis.match(CONTROL_BYTE);
     if (cb) report.breaks.push(`CONTROL_BYTE on screen colour=${colour}: U+${cb[0].codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}`);
+    // U+FFFD is the one character on a report that can only have come from
+    // this tool — TextDecoder emits it where the bytes were not UTF-8, which is
+    // a decoder reporting that it failed. A message may well carry one of its
+    // own (a mis-encoded display name arrives as one), so what is checked is
+    // that the tool did not invent it. A real message spent a whole render
+    // showing them as campaign metadata, and every invariant here passed:
+    // neutralise had made the control bytes among them printable first.
+    if (!raw.includes('\uFFFD') && vis.includes('\uFFFD')) report.breaks.push(`MOJIBAKE on screen colour=${colour}: a decode the tool could not read was printed`);
     if (LIVE_URL.test(vis)) report.breaks.push(`LIVE_URL on screen colour=${colour}`);
     if (PLACEHOLDER.test(vis)) report.breaks.push(`PLACEHOLDER on screen colour=${colour}`);
   }

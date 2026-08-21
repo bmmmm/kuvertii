@@ -288,6 +288,33 @@ function neutraliseDisabledByMutation(text) {
   },
 
   {
+    id: "mojibake-scores-as-prose",
+    promise: "What the decoder could not read is not shown as if it had been.",
+    file: "js/decode.js",
+    find: "    if (c === '\\uFFFD') return false;\n",
+    replace: "",
+    mustKill: [
+      "bytes that are not text do not become text by being printed",
+      "a decode the tool could not read is never put on screen",
+    ],
+    // U+FFFD counted as printable let a blob score 0.52 as prose. A real
+    // newsletter printed five of them as campaign metadata, and the control
+    // bytes alongside them were then read as an attack on the reader.
+  },
+
+  {
+    id: "fold-splits-a-token",
+    promise: "A field folded mid-token is read as the token it was.",
+    file: "js/decode.js",
+    find: "    if (halves.every((candidates) => candidates.length)) {",
+    replace: "    if (halves.length) {",
+    mustKill: ["a fold inside a token does not hide what it carries"],
+    // Unfolding removes the line break, not the space. Splitting on whitespace
+    // handed the decoder two halves of one base64 token, and the recipient's
+    // own address inside it went unreported on real mail.
+  },
+
+  {
     id: "qp-decodes-any-escape",
     promise: "A decoding that is not text was not that encoding.",
     file: "js/decode.js",

@@ -108,7 +108,21 @@ export function decodeIdentifier(value, { min = 6, max = 64 } = {}) {
 export function readability(text) {
   if (!text) return 0;
   const chars = [...text];
+  // U+FFFD is not a character a sender wrote. It is what TextDecoder emits
+  // where the bytes were not UTF-8 at all — the decoder's own verdict on its
+  // own output, and counting it as printable is how a random blob passed for
+  // prose: five replacement characters among twenty-three still left the ratio
+  // at 0.91, and the four letters the noise happened to spell carried it over
+  // the line. Counted for what it is, that blob scores zero.
+  //
+  // Counted, not banned outright. A token can be an opaque prefix followed by
+  // base64, and decoding the whole of it puts a few misaligned bytes at the
+  // head of sixty perfectly readable characters — refusing every decode that
+  // contains one loses the recipient's address in the unsubscribe token, which
+  // is the exact thing this module exists to find. The proportion is the
+  // signal, and 0.85 is where it already sat.
   const printable = chars.filter((c) => {
+    if (c === '\uFFFD') return false;
     const code = c.codePointAt(0);
     return c === '\0' || code === 9 || code === 10 || (code >= 32 && code !== 127);
   }).length;
@@ -193,24 +207,65 @@ export function decodeCandidates(value) {
  * piece has to be tried on its own.
  */
 export function decodeSegments(value, threshold = 0.5) {
-  const pieces = [
-    String(value ?? ''),
-    ...String(value ?? '').split(/[\s.:;,<>"'()[\]]+/).filter((s) => s.length >= 8),
-  ];
+  const raw = String(value ?? '');
+  const readable = (piece) => decodeCandidates(piece).filter((c) => c.score >= threshold);
 
-  const perPiece = pieces
-    .map((piece) => decodeCandidates(piece).filter((c) => c.score >= threshold))
-    .filter((candidates) => candidates.length);
+  // Unfolding removes the line break a long field was wrapped at, not the space
+  // that came with it (RFC 5322 §2.2.3) — and a mailer folds at a fixed width,
+  // not at its own separators, so the fold lands inside a segment as readily as
+  // between two. Splitting on whitespace therefore tore a base64 token in half,
+  // and half a token decodes to noise: on a real Klaviyo message the segment
+  // holding the recipient's own address was cut by a fold, so the address went
+  // unreported and the noise left behind decided how its siblings were read.
+  //
+  // Each token is read whole, with the fold's whitespace taken back out. The
+  // halves are still read too, because a space can also be a genuine separator
+  // and nothing here can tell the two apart — but a half is recorded against the
+  // token it came out of, so the one case that needs no judgement, a half saying
+  // only what the whole already said, can be dropped without comparing every
+  // result against every other. That comparison is what a sender would pay for:
+  // a field may run to a megabyte, and pairwise it cost 12 seconds where the
+  // whole decode had cost 361 milliseconds.
+  const entries = [{ candidates: readable(raw), parent: -1 }];
+  for (const chunk of raw.split(/[.:;,<>"'()[\]]+/)) {
+    if (!/\s/.test(chunk)) {
+      entries.push({ candidates: readable(chunk), parent: -1 });
+      continue;
+    }
+
+    // Whitespace inside a token is either a fold or a separator, and the value
+    // itself cannot say which — but what the two readings decode to can. A
+    // separator leaves both sides readable on their own; a fold leaves at least
+    // one side holding part of a token, which decodes to nothing at all. So the
+    // halves keep the field only when every one of them can carry it, and
+    // otherwise the token is read whole, as it was before the fold.
+    const halves = chunk.split(/\s+/).map((half) => readable(half));
+    if (halves.every((candidates) => candidates.length)) {
+      for (const candidates of halves) entries.push({ candidates, parent: -1 });
+      continue;
+    }
+
+    const whole = entries.length;
+    entries.push({ candidates: readable(chunk.replace(/\s+/g, '')), parent: -1 });
+    for (const candidates of halves) entries.push({ candidates, parent: whole });
+  }
 
   // One segment usually decodes unambiguously — an address settles its own
   // orientation, because only one reading ends in a real TLD. Whichever method
   // wins there is applied to its siblings, which on their own are a coin flip.
-  const dominant = perPiece.flat().sort((a, b) => b.score - a.score)[0]?.method;
+  const dominant = entries.flatMap((e) => e.candidates).sort((a, b) => b.score - a.score)[0]?.method;
 
+  const picks = new Array(entries.length).fill(null);
   const results = [];
   const seen = new Set();
-  for (const candidates of perPiece) {
-    const pick = candidates.find((c) => c.method === dominant) ?? candidates[0];
+  for (const [index, entry] of entries.entries()) {
+    if (!entry.candidates.length) continue;
+    const pick = entry.candidates.find((c) => c.method === dominant) ?? entry.candidates[0];
+    picks[index] = pick;
+    // `nual"}}` is the tail of this token's own reading, decoded on its own:
+    // not a second finding, the same bytes read worse.
+    const parent = entry.parent >= 0 ? picks[entry.parent] : null;
+    if (parent && parent.text.includes(pick.text)) continue;
     if (seen.has(pick.text)) continue;
     seen.add(pick.text);
     results.push(pick);
