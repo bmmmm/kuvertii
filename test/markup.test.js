@@ -141,6 +141,18 @@ test('link text past its ceiling is clipped, not unbounded', () => {
 });
 
 // -------------------------------------------------------------------- timing
+//
+// Wall-clock, deliberately — the same call the hostile suite makes, for the
+// same reason: a shape assertion cannot go red on a regex that has started to
+// backtrack, which is the only failure these guard against. A ceiling can, so
+// long as it sits far enough above the honest cost to ignore a slow runner and
+// far enough below a quadratic blow-up to still catch one. The rule the hostile
+// suite states is ~20x the cost measured on the machine this was written on;
+// these three had drifted to ~3x, and the unclosed-brackets scan (~450ms here,
+// ~1.5s on a shared CI runner) duly went red at 1515ms against a 1500ms line.
+// Reset to the 20x the rest of the suite uses: the gap to a real regression is
+// enormous — quadratic behaviour on 4 MB is minutes, not milliseconds — so the
+// headroom is free, and the number is a tripwire, not a latency budget.
 
 const took = (fn) => {
   const started = Date.now();
@@ -148,18 +160,18 @@ const took = (fn) => {
   return Date.now() - started;
 };
 
-test('4 MB of hostile tag soup scans in about a second', () => {
+test('4 MB of hostile tag soup scans without backtracking', () => {
   const soup = '<a href="https://x.example/aaaaaaaa?b=ccccc">text</a><<<>>><b><i><td>'.repeat(60000);
   const ms = took(() => scanMarkup(soup));
-  assert.ok(ms < 1500, `took ${ms}ms`);
+  assert.ok(ms < 2500, `took ${ms}ms`); // ~20x the ~120ms measured here
 });
 
-test('4 MB of unclosed brackets scans in about a second', () => {
+test('4 MB of unclosed brackets scans without backtracking', () => {
   const ms = took(() => scanMarkup('< '.repeat(2 * 1024 * 1024)));
-  assert.ok(ms < 1500, `took ${ms}ms`);
+  assert.ok(ms < 9000, `took ${ms}ms`); // ~20x the ~450ms measured here
 });
 
 test('4 MB of script that never closes scans instantly', () => {
   const ms = took(() => scanMarkup(`<script>${'x'.repeat(4 * 1024 * 1024)}`));
-  assert.ok(ms < 500, `took ${ms}ms`);
+  assert.ok(ms < 500, `took ${ms}ms`); // bails at the tag; measured ~0ms
 });
