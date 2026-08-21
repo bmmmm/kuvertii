@@ -621,6 +621,27 @@ const DOUBLE_EXTENSION_RE = /\.(pdf|docx?|xlsx?|pptx?|jpe?g|png|gif|txt|html?|cs
 // accusation — plenty of honest mail ships a zip.
 const ARCHIVE_EXT_RE = /\.(zip|rar|7z|iso|img|tar|gz|tgz|cab|ace|arj)$/i;
 
+/**
+ * The name the operating system acts on, which is not always the name written.
+ *
+ * The extension checks anchor on the end of the string, so they see whatever
+ * the sender put last. Windows does not: the Win32 path layer strips trailing
+ * dots and spaces from the final component, and an NTFS data-stream suffix
+ * (`report.exe::$DATA`, `report.exe:x`) names a stream on `report.exe`. So
+ * `invoice.pdf.exe `, `report.exe.` and `report.exe::$DATA` all open the
+ * executable, while the raw name ends in `.exe `, `.exe.` or `.exe::$DATA` and
+ * every `$`-anchored check read it as harmless — the card going silent on a
+ * file the system runs, which is the one thing this card exists to prevent.
+ *
+ * Stripping only ever removes trailing junk or a stream suffix, so it can
+ * expose a hidden extension but never invent one: a genuine `.txt` still ends
+ * in `.txt` afterwards, so nothing safe is newly accused.
+ */
+function osResolvedName(name) {
+  const base = String(name).split(':')[0]; // an ADS suffix is a stream on the base name
+  return base.replace(/[.\s]+$/, ''); // trailing dots and spaces the OS drops
+}
+
 // The magic numbers this card can recognise in a part's first bytes. Small on
 // purpose: only signatures unambiguous enough that a mismatch is a statement,
 // not a guess.
@@ -683,21 +704,28 @@ function attachmentFinding(parts) {
       ? `${part.bytesDeclared.toLocaleString('en')} bytes`
       : 'size unstated';
 
+    // Judge the name the OS would act on, not the bytes as written — otherwise a
+    // trailing dot, space or `::$DATA` stream suffix hides the real extension.
+    const runs = osResolvedName(name);
+    const disguised = runs !== name && runs.length
+      ? ' Its trailing characters — dots, spaces, or an NTFS stream suffix — are stripped by the operating system before it opens the file, so the extension shown here is the one that runs.'
+      : '';
+
     const tells = [];
-    if (DOUBLE_EXTENSION_RE.test(name)) {
+    if (DOUBLE_EXTENSION_RE.test(runs)) {
       tells.push({
         level: 'bad',
-        note: 'The name wears two extensions — a document\'s in the middle, an executable\'s at the end. Clients that hide known extensions show only the harmless half, which is the point of naming it this way.',
+        note: `The name wears two extensions — a document's in the middle, an executable's at the end. Clients that hide known extensions show only the harmless half, which is the point of naming it this way.${disguised}`,
       });
-    } else if (EXECUTABLE_EXT_RE.test(name)) {
+    } else if (EXECUTABLE_EXT_RE.test(runs)) {
       tells.push({
         level: 'bad',
-        note: 'The extension is one the operating system runs rather than opens. No honest workflow sends executables by mail.',
+        note: `The extension is one the operating system runs rather than opens. No honest workflow sends executables by mail.${disguised}`,
       });
-    } else if (ARCHIVE_EXT_RE.test(name)) {
+    } else if (ARCHIVE_EXT_RE.test(runs)) {
       tells.push({
         level: 'caution',
-        note: 'An archive. Its contents are not examined here — an archive is also how an executable usually arrives wrapped.',
+        note: `An archive. Its contents are not examined here — an archive is also how an executable usually arrives wrapped.${disguised}`,
       });
     }
 

@@ -1210,12 +1210,23 @@ function el(tag, className, text) {
     id: 'double-extension-unread',
     promise: 'A name wearing two extensions is called the trick it is, not a mere executable.',
     file: 'js/body.js',
-    find: `    if (DOUBLE_EXTENSION_RE.test(name)) {`,
+    find: `    if (DOUBLE_EXTENSION_RE.test(runs)) {`,
     replace: `    if (false) {`,
     mustKill: ['a double extension is bad, and the trick is explained'],
     // The fallthrough still marks it executable, so the level survives — what
     // is lost is the explanation of the disguise, which is what the reader
     // needed: clients that hide known extensions show only the harmless half.
+  },
+
+  {
+    id: 'filename-danger-reads-raw-name',
+    promise: 'The danger checks read the name the OS runs, not the name as written.',
+    file: 'js/body.js',
+    find: `    const runs = osResolvedName(name);`,
+    replace: `    const runs = name;`,
+    mustKill: ['a name the OS strips to an executable is not read as harmless'],
+    // A trailing dot, space or `::$DATA` suffix hid the extension from the
+    // `$`-anchored checks; Windows strips it and runs the file anyway.
   },
 
   {

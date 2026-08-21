@@ -456,6 +456,32 @@ test('an archive is a caution, not an accusation', () => {
   assert.match(card.items[0].note, /not examined/);
 });
 
+test('a name the OS strips to an executable is not read as harmless', () => {
+  // The extension checks anchor on the end of the string; Windows does not.
+  // The Win32 path layer strips trailing dots and spaces from the final
+  // component, and `report.exe::$DATA` / `report.exe:x` names a stream on
+  // `report.exe`, so each of these opens the executable — while the `$`-anchored
+  // checks read `.exe `, `.exe.`, `.exe\t` or `.exe::$DATA` and the card stayed
+  // silent on a file the system runs, the one thing this card exists to prevent.
+  for (const filename of [
+    'rechnung.pdf.exe ', 'rechnung.pdf.exe.', 'update.exe ', 'update.exe.',
+    'update.exe\t', 'update.exe::$DATA', 'update.exe:evil', 'update.scr. .',
+  ]) {
+    const card = attachmentCard(attachment({ filename, contentType: 'application/octet-stream', head: null }));
+    assert.equal(card.items[0].level, 'bad', `${JSON.stringify(filename)} runs as an executable`);
+    assert.match(card.items[0].note, /stripped by the operating system/);
+    assert.equal(card.tone, 'alert');
+  }
+
+  // Stripping only exposes a hidden extension, it never invents one: a name
+  // whose resolved form ends in a safe extension stays safe, trailing space and
+  // all. Without this the fix would cry wolf on ordinary mail.
+  for (const filename of ['notes.txt ', 'report.exe.txt', 'photo.jpg.', 'letter.pdf ']) {
+    const card = attachmentCard(attachment({ filename, contentType: 'application/octet-stream', head: null }));
+    assert.equal(card.items[0].level, null, `${JSON.stringify(filename)} resolves to a safe extension`);
+  }
+});
+
 test('a declared PDF whose first bytes are a program is code, said plainly', () => {
   const card = attachmentCard(attachment({ head: [0x4d, 0x5a, 0x90, 0x00] }));
   const row = card.items[0];
