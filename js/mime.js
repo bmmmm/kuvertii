@@ -451,13 +451,18 @@ function parseContentType(value) {
     boundary: parameter(raw, 'boundary'),
     name: parameter(raw, 'name'),
     extendedName: extendedParameter(raw, 'name'),
+    continuationName: continuationParameter(raw, 'name'),
   };
 }
 
 function parseDisposition(value, contentType) {
   const raw = String(value ?? '').trim();
-  const name = extendedParameter(raw, 'filename') ?? parameter(raw, 'filename')
-    ?? contentType.extendedName ?? contentType.name;
+  // Continuation first, then single-extended, then plain — the order a
+  // conformant client prefers when more than one form is present, so the tool
+  // reads the name the client would act on rather than a decoy alongside it.
+  const name = continuationParameter(raw, 'filename')
+    ?? extendedParameter(raw, 'filename') ?? parameter(raw, 'filename')
+    ?? contentType.continuationName ?? contentType.extendedName ?? contentType.name;
   // `size=` is optional and most mailers never write it. `Number(null)` is 0,
   // so an absent parameter passed the safe-integer check as a stated size of
   // zero, `bytesDeclared` never fell through to the size actually decoded, and
@@ -503,6 +508,60 @@ function extendedParameter(value, name) {
   } catch {
     return encoded;
   }
+}
+
+/**
+ * The RFC 2231 §3 continuation form, `name*0=…; name*1=…`, reassembled.
+ *
+ * A long or non-ASCII parameter is split across numbered segments, and a
+ * conformant client concatenates them in index order before acting on the
+ * result. This tool read only `filename=` and the single `filename*=`, so a
+ * name written as `filename*0="report."; filename*1="exe"` matched neither: the
+ * part came out with no filename at all, the `$`-anchored executable check ran
+ * on "(unnamed)", and the attachment card went silent on a file the client
+ * saves and runs as report.exe — the same false reassurance as the language-tag
+ * gap, one RFC section over.
+ *
+ * A segment key ending in `*` (`name*0*=`) is percent-encoded; the first such
+ * segment carries a `charset'language'` prefix that governs the whole value and
+ * is stripped. Runs of encoded segments are decoded together, so a percent
+ * escape split across a segment boundary still decodes. Returns null when no
+ * continuation segment is present, so the caller falls through to the plain form.
+ */
+function continuationParameter(value, name) {
+  const raw = String(value ?? '');
+  const re = new RegExp(
+    `[;\\s]\\s*${name}\\*(\\d{1,3})(\\*?)\\s*=\\s*(?:"([^"]{0,1024})"|([^;\\s]{1,1024}))`,
+    'gi',
+  );
+  const segments = [];
+  let match;
+  while ((match = re.exec(raw)) !== null) {
+    segments.push({ index: Number(match[1]), encoded: match[2] === '*', text: match[3] ?? match[4] });
+  }
+  if (!segments.length) return null;
+  segments.sort((a, b) => a.index - b.index);
+
+  let firstEncoded = true;
+  let out = '';
+  let encRun = '';
+  const flush = () => {
+    if (!encRun) return;
+    try { out += decodeURIComponent(encRun); } catch { out += encRun; }
+    encRun = '';
+  };
+  for (const seg of segments) {
+    if (seg.encoded) {
+      let enc = seg.text;
+      if (firstEncoded) { enc = enc.replace(/^[^']{0,40}'[^']{0,40}'/, ''); firstEncoded = false; }
+      encRun += enc;
+    } else {
+      flush();
+      out += seg.text;
+    }
+  }
+  flush();
+  return out;
 }
 
 function normalEncoding(value) {

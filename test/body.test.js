@@ -529,6 +529,64 @@ test('a language-tagged encoded-word filename is decoded before the danger check
   assert.equal(cardFor(`=?utf-8?B?${enc('report.exe')}?=`).items[0].level, 'bad', 'the plain form still fires');
 });
 
+test('a filename split across RFC 2231 continuation segments is reassembled first', () => {
+  // RFC 2231 §3: a long or non-ASCII parameter is split across numbered
+  // segments — `filename*0="report."; filename*1="exe"` — and a conformant
+  // client concatenates them in index order before acting on the result. The
+  // tool read only `filename=` and the single `filename*=`, so the split name
+  // matched neither, the part came out unnamed, and the `$`-anchored executable
+  // check ran on "(unnamed)" — silent on a file the client runs as report.exe.
+  // The same false reassurance as the language-tag gap, one RFC section over.
+  // Driven through the real parseParts → analyseBody path.
+  const card = (disposition, contentType = 'application/octet-stream') => {
+    const { headerText, bodyText } = splitMessage([
+      'Content-Type: multipart/mixed; boundary="B"',
+      '',
+      '--B',
+      'Content-Type: text/plain',
+      '',
+      'See attached.',
+      '--B',
+      `Content-Type: ${contentType}`,
+      disposition,
+      'Content-Transfer-Encoding: base64',
+      '',
+      'AAAAAA==',
+      '--B--',
+    ].join('\n'));
+    const { parts } = parseParts(parseHeaders(headerText), bodyText);
+    const inv = analyseBody(parts).find((f) => f.id === 'attachments');
+    return { level: inv.items[0].level, name: parts.find((p) => p.disposition === 'attachment')?.filename };
+  };
+
+  // Literal, percent-encoded, out-of-order, and a multibyte escape split across
+  // the boundary — every form a client reassembles, the tool now does too.
+  let c = card('Content-Disposition: attachment; filename*0="report."; filename*1="exe"');
+  assert.equal(c.level, 'bad', 'literal continuation runs as report.exe');
+  assert.equal(c.name, 'report.exe');
+
+  c = card("Content-Disposition: attachment; filename*0*=utf-8''report.; filename*1*=scr");
+  assert.equal(c.level, 'bad', 'encoded continuation runs as report.scr');
+
+  c = card('Content-Disposition: attachment; filename*1="exe"; filename*0="update."');
+  assert.equal(c.name, 'update.exe', 'segments reassemble by index, not by order written');
+
+  c = card("Content-Disposition: attachment; filename*0*=utf-8''caf%C3; filename*1*=%A9.exe");
+  assert.equal(c.name, 'café.exe', 'a percent escape split across the boundary still decodes');
+  assert.equal(c.level, 'bad');
+
+  // A split name in the Content-Type `name` parameter, not the disposition.
+  c = card('Content-Disposition: attachment', 'application/octet-stream; name*0="run."; name*1="bat"');
+  assert.equal(c.name, 'run.bat');
+  assert.equal(c.level, 'bad');
+
+  // Both boundaries: a safe name split across segments is not newly accused, and
+  // the older single forms still resolve exactly as before.
+  assert.equal(card('Content-Disposition: attachment; filename*0="quarterly."; filename*1="pdf"').level, null, 'a safe split name stays quiet');
+  assert.equal(card('Content-Disposition: attachment; filename="report.exe"').level, 'bad', 'the plain form still fires');
+  assert.equal(card("Content-Disposition: attachment; filename*=utf-8''report.exe").level, 'bad', 'the single extended form still fires');
+});
+
 test('a declared PDF whose first bytes are a program is code, said plainly', () => {
   const card = attachmentCard(attachment({ head: [0x4d, 0x5a, 0x90, 0x00] }));
   const row = card.items[0];

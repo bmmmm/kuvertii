@@ -1258,6 +1258,17 @@ function el(tag, className, text) {
   },
 
   {
+    id: 'continuation-filename-unread',
+    promise: 'A filename split across RFC 2231 continuation segments is reassembled, as a client reassembles it.',
+    file: 'js/mime.js',
+    find: `  if (!segments.length) return null;\n  segments.sort((a, b) => a.index - b.index);`,
+    replace: `  return null;`,
+    mustKill: ['a filename split across RFC 2231 continuation segments is reassembled first'],
+    // filename*0=/filename*1= matched neither filename= nor filename*=, so the
+    // part came out unnamed and the executable check ran on "(unnamed)".
+  },
+
+  {
     id: 'magic-bytes-unread',
     promise: 'The declared type is checked against the part\'s first bytes, the one look taken inside.',
     file: 'js/body.js',
