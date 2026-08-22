@@ -114,6 +114,25 @@ And when the paste carries the body:
 Localised header labels are understood, so a paste out of a German, French,
 Spanish, Italian or Dutch mail client works as-is (`An:`, `Antwort an:`, …).
 
+## What it is not
+
+By the time a message reaches kuvertii you have already opened it. Your client
+fetched it, laid out its HTML, resolved whatever remote content you permit, and
+keeps a copy in its own store — this reads the same bytes afterwards, out of a
+text box, with none of that undone. No message becomes safe by being read twice.
+
+The order matters, because it decides what a finding is worth. A tracking pixel
+named here has already reported that you opened the message; naming it does not
+call that back. An attachment inventoried here was written to disk by the client
+that received it, and a type-versus-bytes mismatch is a reason not to open it —
+not a statement that it was ever contained.
+
+What is still open at that point is the next decision: the click, the reply, the
+credential, the attachment. Every one of those is made on what the message
+claims about itself, and those claims are exactly what this reads back to you.
+It is a reading tool, and the reading happens after the fact — which is also why
+the question it answers is the recipient's rather than an administrator's.
+
 ## Privacy
 
 Nothing you paste leaves the page.
@@ -285,7 +304,7 @@ No build step, no dependencies. Node is used only to run the tests and to bake
 the blocklist.
 
 ```sh
-node --test                          # 428 tests, stdlib only
+node --test                          # 452 tests, stdlib only
 node tools/mutate.mjs                # breaks each promise, checks the suite notices
 node tools/promises.mjs              # what is promised, and what would catch it breaking
 node tools/build-blocklist.mjs       # writes data/ (gitignored, built in CI)

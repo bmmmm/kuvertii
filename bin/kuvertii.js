@@ -44,7 +44,12 @@ Options
 
 Nothing is sent anywhere. Links found in the message are printed defanged —
 hxxps://example[.]com — so that no terminal turns them into something
-clickable. Nothing in this program ever opens one.`;
+clickable. Nothing in this program ever opens one.
+
+This reads a message you already have. By the time it reaches the clipboard
+your mail client has fetched it, rendered it and kept a copy, and none of that
+is undone here: no message becomes safe by being read twice. What is still open
+is the next decision — the click, the reply, the attachment.`;
 
 // ------------------------------------------------------------------- blocklist
 

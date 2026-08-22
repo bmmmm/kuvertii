@@ -1381,4 +1381,28 @@ function decodeMailCharsetDisabledByMutation(bytes, label) {
     // grows a U+009B out of bytes that carried none, and the tool would then be
     // reporting its own decoder's output as the sender's intent.
   },
+
+  // ------------------------------------------------- what the prose may claim
+  //
+  // Every mutation above breaks behaviour. This one breaks a sentence, because
+  // the failure it guards against is a sentence.
+  //
+  // The surfaces describe at length what this tool does not do — nothing
+  // fetched, nothing rendered, nothing opened, nothing sent — and each of those
+  // is true. Added up by a reader they become a protection that was never on
+  // offer: the message was delivered, opened, laid out and stored by a mail
+  // client before any of this ran. The one sentence that keeps the sum honest
+  // is the one that states the order, and prose is precisely the part of a
+  // repository nothing executes. So this executes it.
+  {
+    id: 'claims-protection',
+    promise: 'No surface claims this tool stands between the reader and the message.',
+    file: 'index.html',
+    find: `No message becomes safe by being read twice.`,
+    replace: `It protects you from the message.`,
+    mustKill: [
+      'index.html does not claim to protect the reader',
+      'index.html says the reading happens after the fact',
+    ],
+  },
 ];
