@@ -343,6 +343,176 @@ export function decodeQuotedPrintable(text) {
     .replace(/=([0-9A-F]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 }
 
+// --------------------------------------------------- charsets mail still uses
+
+/**
+ * The charsets a mail client decodes and `TextDecoder` refuses.
+ *
+ * `TextDecoder` implements the WHATWG Encoding Standard, which is a
+ * specification for *browsers*. It leaves UTF-7 out entirely and maps the
+ * ISO-2022-CN/KR family and HZ onto its "replacement" encoding — a deliberate
+ * refusal, because a page whose bytes can be re-read under a second encoding is
+ * how a `<script>` gets past a filter that only looked at the first reading.
+ *
+ * None of that reasoning reaches this program. It never renders a body; it
+ * describes one. What it inherits from the browser instead is blindness in
+ * exactly the place a sender would choose: `charset=utf-7` and a phishing
+ * anchor written as `+ADw-a href…` drew no link card at all, because the tool
+ * saw one opaque token where the reader's client renders a live link. And
+ * ISO-2022-KR is not an attack at all — it is what RFC 1557 defines for Korean
+ * mail, so an attachment named `보고서.exe` in an ISO-2022-KR encoded-word left
+ * the executable check reading `=?ISO-2022-KR?B?…?=` and the card silent.
+ *
+ * Each of these is mechanical, which is why they are here and ISO-2022-CN is
+ * not: ISO-2022-KR and HZ are their 8-bit siblings (EUC-KR, GBK) with the high
+ * bit carried by a shift sequence, and UTF-7 is base64 over UTF-16. ISO-2022-CN
+ * can designate CNS 11643 planes, which no encoding `TextDecoder` knows can
+ * represent, so rewriting it would be inventing characters rather than reading
+ * them — it stays on the caller's existing fallback.
+ *
+ * Keyed by the labels IANA registers, since that is what a mail header writes.
+ */
+const MAIL_ONLY_CHARSETS = new Map([
+  ['utf-7', 'utf-7'],
+  ['csutf7', 'utf-7'],
+  ['unicode-1-1-utf-7', 'utf-7'],
+  ['csunicode11utf7', 'utf-7'],
+  ['iso-2022-kr', 'iso-2022-kr'],
+  ['csiso2022kr', 'iso-2022-kr'],
+  ['hz-gb-2312', 'hz-gb-2312'],
+  ['cshzgb2312', 'hz-gb-2312'],
+]);
+
+/** Which of the above a label names, or null for everything else. */
+export function mailOnlyCharset(label) {
+  return MAIL_ONLY_CHARSETS.get(String(label ?? '').trim().toLowerCase()) ?? null;
+}
+
+const UTF7_B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/**
+ * UTF-7 (RFC 2152): ASCII in the clear, everything else in a `+…-` run of
+ * modified base64 over UTF-16 code units.
+ *
+ * `+-` is the one escape: a literal plus. A run ends at the first character
+ * outside the base64 alphabet, which is consumed when it is `-` and kept
+ * otherwise. Leftover bits at the end of a run are padding by construction and
+ * are dropped, which is also what a client does with a truncated run.
+ */
+function fromUtf7(bytes) {
+  let out = '';
+  let inRun = false;
+  let taken = 0;
+  let bits = 0;
+  let held = 0;
+
+  for (const byte of bytes) {
+    const ch = String.fromCharCode(byte);
+    if (!inRun) {
+      if (ch === '+') { inRun = true; taken = 0; bits = 0; held = 0; continue; }
+      out += ch;
+      continue;
+    }
+    const value = UTF7_B64.indexOf(ch);
+    if (value >= 0) {
+      bits = (bits << 6) | value;
+      held += 6;
+      taken += 1;
+      if (held >= 16) {
+        held -= 16;
+        out += String.fromCharCode((bits >> held) & 0xffff);
+      }
+      continue;
+    }
+    if (!taken && ch === '-') out += '+';
+    else if (ch !== '-') out += ch;
+    inRun = false;
+  }
+  return out;
+}
+
+/**
+ * The 7-bit ISO 2022 / HZ forms, rewritten into the 8-bit encoding they are a
+ * shifted spelling of, and handed to the decoder that does know it.
+ *
+ * `shift` recognises the bytes that move in and out of the double-byte set;
+ * inside it every byte is its 8-bit counterpart with the high bit set. Both
+ * specifications reset the state at every line break (RFC 1557 §4, RFC 1843
+ * §2), so a message that forgets to shift back cannot swallow the rest of
+ * itself.
+ */
+function fromShifted(bytes, target, shift) {
+  const out = [];
+  let shifted = false;
+  for (let i = 0; i < bytes.length; i++) {
+    const byte = bytes[i];
+    if (byte === 0x0a || byte === 0x0d) { shifted = false; out.push(byte); continue; }
+    const move = shift(bytes, i, shifted);
+    if (move) {
+      if (move.emit !== undefined) out.push(move.emit);
+      if (move.shifted !== undefined) shifted = move.shifted;
+      i += move.skip;
+      continue;
+    }
+    // Only a graphic byte is half of a double-byte character. Raising the high
+    // bit on anything else would manufacture the one thing this program is
+    // most careful never to manufacture: 0x1B shifted is 0x9B, the C1 spelling
+    // of CSI, so a malformed run would grow a terminal escape sequence that
+    // nobody sent. Control bytes pass through as themselves, and stay evidence.
+    const graphic = byte > 0x20 && byte < 0x7f;
+    out.push(shifted && graphic ? byte | 0x80 : byte);
+  }
+  return new TextDecoder(target, { fatal: false }).decode(Uint8Array.from(out));
+}
+
+/** ISO-2022-KR (RFC 1557): `ESC $ ) C` announces it, SO/SI shift into KS X 1001. */
+function fromIso2022kr(bytes) {
+  return fromShifted(bytes, 'euc-kr', (all, i) => {
+    // The one escape this charset defines is the designator, and it carries no
+    // text. Any other ESC is not part of the encoding and is left where it is,
+    // because a stray escape byte in a mail body is a finding of its own.
+    if (all[i] === 0x1b && all[i + 1] === 0x24 && all[i + 2] === 0x29) return { skip: 3 };
+    if (all[i] === 0x0e) return { shifted: true, skip: 0 };
+    if (all[i] === 0x0f) return { shifted: false, skip: 0 };
+    return null;
+  });
+}
+
+/** HZ-GB-2312 (RFC 1843): `~{` and `~}` shift, `~~` is a tilde, `~\n` joins lines. */
+function fromHz(bytes) {
+  return fromShifted(bytes, 'gbk', (all, i, shifted) => {
+    if (all[i] !== 0x7e) return null;
+    const next = all[i + 1];
+    if (next === 0x7e) return { emit: 0x7e, skip: 1 };
+    if (next === 0x7b) return { shifted: true, skip: 1 };
+    if (next === 0x7d) return { shifted: false, skip: 1 };
+    // A line continuation removes the break and carries the state across it —
+    // the one place the per-line reset does not apply (RFC 1843 §2.2).
+    if (next === 0x0a) return { shifted, skip: 1 };
+    return null;
+  });
+}
+
+/**
+ * Bytes read under a charset only mail uses, or null when this is not one.
+ *
+ * Null rather than a guess, twice over: for a label outside the table, and for
+ * a stream carrying a byte above 0x7F. All three of these encodings are 7-bit
+ * by definition, so a high byte means the bytes are not what the label says —
+ * the same rule js/mime.js already applies to quoted-printable, and the reason
+ * a message that mislabels UTF-8 as UTF-7 keeps being read as the UTF-8 it is.
+ */
+export function decodeMailCharset(bytes, label) {
+  const family = mailOnlyCharset(label);
+  if (!family) return null;
+  for (const byte of bytes) {
+    if (byte > 0x7f) return null;
+  }
+  if (family === 'utf-7') return fromUtf7(bytes);
+  if (family === 'iso-2022-kr') return fromIso2022kr(bytes);
+  return fromHz(bytes);
+}
+
 export function decodeEncodedWords(text) {
   // RFC 2047 §6.2: whitespace separating two adjacent encoded-words is removed
   // on display — it is there only so a long run can be split across words (and
@@ -376,7 +546,12 @@ export function decodeEncodedWords(text) {
           // attachment card went silent on a file the client runs. Stripping the
           // tag only ever exposes what a real reader already sees.
           const label = charset.toLowerCase().split('*')[0];
-          return new TextDecoder(label, { fatal: false }).decode(bytes);
+          // The charsets only mail uses get first refusal; everything else is
+          // the Encoding Standard's, including its throw for a label it does
+          // not know, which is what keeps an unreadable word raw rather than
+          // rendered as somebody's guess.
+          return decodeMailCharset(bytes, label)
+            ?? new TextDecoder(label, { fatal: false }).decode(bytes);
         } catch {
           return whole;
         }

@@ -587,6 +587,79 @@ test('a filename split across RFC 2231 continuation segments is reassembled firs
   assert.equal(card("Content-Disposition: attachment; filename*=utf-8''report.exe").level, 'bad', 'the single extended form still fires');
 });
 
+test('a charset the browser refuses but mail uses is read before the checks run', () => {
+  // `TextDecoder` implements the Encoding Standard, written for browsers: it
+  // leaves UTF-7 out and maps ISO-2022-KR and HZ onto a deliberate refusal. Mail
+  // clients honour all three, so the tool went blind exactly where a sender
+  // would aim. Two consequences, measured on the real pipeline before the fix:
+  // an attachment named in an ISO-2022-KR encoded-word left the `$`-anchored
+  // executable check reading a string ending in `?=` and the card silent on a
+  // file the client saves and runs; and a `charset=utf-7` body whose anchor was
+  // written `+ADw-a href…` produced no link card at all.
+  //
+  // These are the absolute anchors under the twin invariant in
+  // test/invariants.test.js: that one compares two spellings of a message
+  // against each other, so it stays green if both go silent together. This one
+  // says the cards fire at all.
+  const b64 = (bytes) => Buffer.from(Uint8Array.from(bytes)).toString('base64');
+  const ascii = (text) => [...text].map((c) => c.charCodeAt(0));
+  // ESC $ ) C, SO, the KS X 1001 pair for 가, SI, then ".exe" in the clear.
+  const koreanExe = [0x1b, 0x24, 0x29, 0x43, 0x0e, 0x30, 0x21, 0x0f, ...ascii('.exe')];
+
+  const { headerText, bodyText } = splitMessage([
+    'Content-Type: multipart/mixed; boundary="B"',
+    '',
+    '--B',
+    'Content-Type: text/plain',
+    '',
+    'See attached.',
+    '--B',
+    'Content-Type: application/octet-stream',
+    `Content-Disposition: attachment; filename="=?ISO-2022-KR?B?${b64(koreanExe)}?="`,
+    'Content-Transfer-Encoding: base64',
+    '',
+    'AAAAAA==',
+    '--B--',
+  ].join('\n'));
+  const { parts } = parseParts(parseHeaders(headerText), bodyText);
+  const attachments = analyseBody(parts).find((f) => f.id === 'attachments');
+  assert.equal(parts.find((p) => p.disposition === 'attachment').filename, '가.exe');
+  assert.equal(attachments.items[0].level, 'bad', 'the executable check reads the name a client shows');
+  assert.equal(attachments.tone, 'alert');
+
+  // UTF-7 needs no transfer encoding — that pairing is how it arrives, and it
+  // is the path that reached no charset at all.
+  const utf7 = (text) => {
+    const units = [];
+    for (let i = 0; i < text.length; i++) units.push(text.charCodeAt(i) >> 8, text.charCodeAt(i) & 0xff);
+    return `+${b64(units).replace(/=+$/, '')}-`;
+  };
+  const hidden = splitMessage([
+    'Content-Type: text/html; charset=utf-7',
+    'Content-Transfer-Encoding: 7bit',
+    '',
+    utf7('<a href="https://secure-paypa1.example/login">Your account</a>'),
+  ].join('\n'));
+  const links = analyseBody(parseParts(parseHeaders(hidden.headerText), hidden.bodyText).parts)
+    .find((f) => f.id === 'body-links');
+  assert.ok(links, 'the link card exists at all');
+  assert.match(flat(links), /secure-paypa1/, 'the destination a utf-7 client reaches is named');
+
+  // The boundary, and the reason the decode is refused for anything carrying a
+  // high byte: all three of these charsets are 7-bit by definition, so a body
+  // that declares one and sends UTF-8 is mislabelled — and is still read as the
+  // UTF-8 it is, rather than mangled into a second wrong reading. Crying wolf
+  // over honest mail is this project's other failure mode.
+  const mislabelled = splitMessage([
+    'Content-Type: text/plain; charset=utf-7',
+    'Content-Transfer-Encoding: base64',
+    '',
+    Buffer.from('Grüße aus München', 'utf8').toString('base64'),
+  ].join('\n'));
+  const { parts: honest } = parseParts(parseHeaders(mislabelled.headerText), mislabelled.bodyText);
+  assert.equal(honest[0].text, 'Grüße aus München', 'a mislabelled body is read as what it is');
+});
+
 test('a declared PDF whose first bytes are a program is code, said plainly', () => {
   const card = attachmentCard(attachment({ head: [0x4d, 0x5a, 0x90, 0x00] }));
   const row = card.items[0];

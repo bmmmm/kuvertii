@@ -13,7 +13,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { analyseBody } from '../js/body.js';
 import { ALL_CLEAR_TITLE, analyse } from '../js/findings.js';
+import { parseParts, splitMessage } from '../js/mime.js';
 import { createRenderer } from '../js/terminal.js';
 import { parseHeaders } from '../js/unfold.js';
 import { authCombinations, compauthCombinations, DECISIVE } from './verdicts.js';
@@ -132,4 +134,181 @@ test('a decode the tool could not read is never put on screen', () => {
   }
 
   assert.deepEqual(offenders.slice(0, 5), [], `${offenders.length} render(s) printed a failed decode`);
+});
+
+// ------------------------------------------------ charsets only mail declares
+
+/**
+ * Deterministic double-byte characters, as bytes in a legacy 8-bit charset.
+ *
+ * The lead and trail ranges are ones EUC-KR and GBK both fill with ordinary
+ * Hangul and Hanzi, so every pair generated here is a character a reader could
+ * receive rather than a hole in the table.
+ */
+function wideRun(count, offset) {
+  const bytes = [];
+  for (let i = 0; i < count; i++) {
+    bytes.push(0xb0 + ((i + offset) % 4), 0xa1 + ((i * 3 + offset) % 16));
+  }
+  return Uint8Array.from(bytes);
+}
+
+const ascii = (text) => Uint8Array.from(text, (c) => c.charCodeAt(0));
+const join = (...runs) => Uint8Array.from(runs.flatMap((run) => [...run]));
+const b64 = (bytes) => Buffer.from(bytes).toString('base64');
+
+const ESC_DESIGNATOR = join([0x1b], ascii('$)C')); // ESC $ ) C — RFC 1557 §4
+const SO = 0x0e;
+const SI = 0x0f;
+
+/**
+ * The three 7-bit charsets, each paired with the 8-bit one it is a spelling of.
+ *
+ * Both spellings take the same segments — plain ASCII strings, and the
+ * generated double-byte run — and return the bytes of that spelling. Nothing
+ * here calls the code under test: the shifts are written out from RFC 1557 §4
+ * and RFC 1843 §2 and the runs from RFC 2152, so the twin states independently
+ * what the message says rather than asking the same decoder twice.
+ */
+const SPELLINGS = [
+  {
+    seven: 'iso-2022-kr',
+    twin: 'euc-kr',
+    eight: (segments) => join(...segments.map((s) => (typeof s === 'string' ? ascii(s) : s))),
+    shifted: (segments) => join(ESC_DESIGNATOR, ...segments.map((s) => (typeof s === 'string'
+      ? ascii(s)
+      : join([SO], Uint8Array.from(s, (b) => b & 0x7f), [SI])))),
+  },
+  {
+    seven: 'hz-gb-2312',
+    twin: 'gbk',
+    eight: (segments) => join(...segments.map((s) => (typeof s === 'string' ? ascii(s) : s))),
+    shifted: (segments) => join(...segments.map((s) => (typeof s === 'string'
+      ? ascii(s)
+      : join(ascii('~{'), Uint8Array.from(s, (b) => b & 0x7f), ascii('~}'))))),
+  },
+  {
+    seven: 'utf-7',
+    twin: 'utf-8',
+    eight: (segments) => join(...segments.map((s) => (typeof s === 'string'
+      ? ascii(s)
+      : new TextEncoder().encode(new TextDecoder('euc-kr').decode(s))))),
+    shifted: (segments) => join(...segments.map((s) => {
+      if (typeof s === 'string') return ascii(s);
+      const text = new TextDecoder('euc-kr').decode(s);
+      const units = [];
+      for (let i = 0; i < text.length; i++) {
+        units.push(text.charCodeAt(i) >> 8, text.charCodeAt(i) & 0xff);
+      }
+      return ascii(`+${b64(Uint8Array.from(units)).replace(/=+$/, '')}-`);
+    })),
+  },
+];
+
+/** Everything a reader is shown, plus the text each part was read as. */
+function reportOf(source) {
+  const { headerText, bodyText, bodyOnly } = splitMessage(source);
+  const headers = parseHeaders(headerText);
+  const { parts } = parseParts(headers, bodyText);
+  const findings = [...analyse(headers), ...analyseBody(parts, { headers, bodyOnly })];
+  return {
+    screen: createRenderer({ colour: false, width: 78 }).render(findings),
+    // Trailing line breaks are the one thing the twins may legitimately differ
+    // in: a base64 part decodes to exactly its payload, while a part carried
+    // without a transfer encoding keeps the break that ended its last line.
+    // Nothing else is normalised — the comparison is otherwise character for
+    // character, in both what was read and what is shown.
+    text: JSON.stringify(parts.map((part) => String(part.text).replace(/\n+$/, ''))),
+  };
+}
+
+const LEAD = ['From: Sender <s@sender.example>', 'To: you@example.org'];
+
+/** The places a declared charset decides what the tool is looking at. */
+const PLACEMENTS = [
+  {
+    what: 'subject',
+    build: (label, word) => [
+      ...LEAD, `Subject: ${word(label)}`, 'MIME-Version: 1.0',
+      'Content-Type: text/plain; charset=us-ascii', '', 'Hello.', '',
+    ].join('\n'),
+  },
+  {
+    what: 'attachment filename',
+    build: (label, word) => [
+      ...LEAD, 'Subject: Invoice', 'MIME-Version: 1.0',
+      'Content-Type: multipart/mixed; boundary=B', '',
+      '--B', 'Content-Type: text/plain', '', 'See attached.',
+      '--B', 'Content-Type: application/octet-stream',
+      `Content-Disposition: attachment; filename="${word(label, '.exe')}"`,
+      'Content-Transfer-Encoding: base64', '', b64(ascii('AAAA')), '--B--', '',
+    ].join('\n'),
+  },
+  {
+    what: 'body, base64',
+    build: (label, word, body) => [
+      ...LEAD, 'Subject: Notice', 'MIME-Version: 1.0',
+      `Content-Type: text/html; charset=${label}`, 'Content-Transfer-Encoding: base64',
+      '', b64(body(label)), '',
+    ].join('\n'),
+  },
+  {
+    what: 'body, no transfer encoding',
+    // The 7-bit spelling needs none by construction; its 8-bit twin cannot do
+    // without one — which is the point. The transfer encoding must not decide
+    // whether the charset is honoured, and this is the path that reached no
+    // charset at all, the one `charset=utf-7` naturally arrives on.
+    build: (label, word, body, sevenBit) => [
+      ...LEAD, 'Subject: Notice', 'MIME-Version: 1.0',
+      `Content-Type: text/html; charset=${label}`,
+      `Content-Transfer-Encoding: ${sevenBit ? '7bit' : 'base64'}`, '',
+      sevenBit ? String.fromCharCode(...body(label)) : b64(body(label)), '',
+    ].join('\n'),
+  },
+];
+
+test('a charset only mail uses reads as the message its 8-bit twin does', () => {
+  // `TextDecoder` implements the Encoding Standard, which is written for
+  // browsers: it leaves UTF-7 out and deliberately maps ISO-2022-KR and HZ onto
+  // a refusal, because re-reading a page under a second encoding is how a
+  // script gets past a filter that only looked at the first reading. A mail
+  // client honours all three, so this tool inherited a blindness sitting
+  // exactly where a sender would aim: a phishing anchor written `+ADw-a href…`
+  // drew no link card whatever, and an attachment named in an ISO-2022-KR
+  // encoded-word left the executable check reading a string ending in `?=`.
+  //
+  // Stated as a twin rather than as expected strings: the same characters, sent
+  // once in the 8-bit charset every decoder knows and once in its 7-bit
+  // spelling, are the same message and owe the reader the same report.
+  const offenders = [];
+
+  for (const spelling of SPELLINGS) {
+    // The premise the rest of this rests on, stated rather than assumed: these
+    // are the labels the platform refuses and their twins are the ones it
+    // takes. If a runtime ever grows one of them, this line says so, and the
+    // table in js/decode.js should give the platform its label back rather than
+    // keep shadowing a decoder that now exists.
+    assert.throws(() => new TextDecoder(spelling.seven), RangeError, `${spelling.seven} is refused`);
+    assert.doesNotThrow(() => new TextDecoder(spelling.twin), `${spelling.twin} is known`);
+
+    for (const offset of [0, 1, 5, 9]) {
+      const wide = wideRun(6 + (offset % 3), offset);
+      const spell = (label, segments) => (label === spelling.seven
+        ? spelling.shifted(segments) : spelling.eight(segments));
+      const word = (label, extra) => `=?${label}?B?${b64(spell(label, extra ? [wide, extra] : [wide]))}?=`;
+      const body = (label) => spell(label, [
+        '<p>', wide, '</p><a href="https://secure-paypa1.example/login">', wide, '</a>',
+      ]);
+
+      for (const placement of PLACEMENTS) {
+        const mine = reportOf(placement.build(spelling.seven, word, body, true));
+        const twin = reportOf(placement.build(spelling.twin, word, body, false));
+        if (mine.screen !== twin.screen || mine.text !== twin.text) {
+          offenders.push(`${spelling.seven} vs ${spelling.twin} in ${placement.what} (offset ${offset})`);
+        }
+      }
+    }
+  }
+
+  assert.deepEqual(offenders.slice(0, 5), [], `${offenders.length} message(s) read unlike their twin`);
 });

@@ -315,3 +315,52 @@ test('an encoded-word with an RFC 2231 language tag is still decoded', () => {
     'an unknown charset is left as written',
   );
 });
+
+test('a 7-bit charset never manufactures a control character out of a control byte', () => {
+  // ISO-2022-KR and HZ are their 8-bit siblings with the high bit carried by a
+  // shift sequence, so decoding them means raising that bit back. Raising it on
+  // whatever happens to sit inside a shifted run is where that becomes an
+  // invention: 0x1B with its high bit set is 0x9B — the C1 spelling of CSI, the
+  // exact introducer js/control.js exists because of. A malformed run would
+  // then grow a terminal escape sequence nobody sent, and this tool would be
+  // reporting its own decoder's output as the sender's intent. Measured before
+  // the guard: `SO ESC [ 2 J SI` produced U+009B followed by a replacement
+  // character, out of six bytes that contained neither.
+  //
+  // Only a graphic byte is half of a double-byte character. Everything else
+  // passes through as itself — still evidence, still shown inert, never
+  // promoted into an instruction.
+  const b64 = (bytes) => Buffer.from(Uint8Array.from(bytes)).toString('base64');
+  const inShiftedRun = (...inner) => decodeEncodedWords(`=?iso-2022-kr?B?${b64([0x0e, ...inner, 0x0f])}?=`);
+
+  for (const [what, bytes] of [
+    ['an escape byte', [0x1b, 0x5b, 0x32, 0x4a]],
+    ['an OSC introducer', [0x1b, 0x5d, 0x35, 0x32, 0x3b]],
+    ['a lone escape byte', [0x1b]],
+    ['a carriage return', [0x0d]],
+    ['a NUL', [0x00]],
+  ]) {
+    const decoded = inShiftedRun(...bytes);
+    for (const char of decoded) {
+      const code = char.codePointAt(0);
+      assert.ok(
+        code < 0x80 || code > 0x9f,
+        `${what} in a shifted run produced U+${code.toString(16).toUpperCase()}`,
+      );
+    }
+    // And it is still there. Passing a control byte through is not the same as
+    // dropping it: js/control.js reports it and both renderers show it inert,
+    // which is the whole reason this decoder must not swallow the evidence
+    // either. A replacement character alongside it is a separate and honest
+    // matter — the run is malformed, its 8-bit twin decodes to the same
+    // replacement, and no encoded-word has ever promised otherwise.
+    assert.ok(
+      decoded.includes(String.fromCharCode(bytes[0])),
+      `${what} in a shifted run was swallowed rather than kept`,
+    );
+  }
+
+  // The boundary: a well-formed run is still decoded, so the guard cannot be
+  // satisfied by refusing to decode at all.
+  assert.equal(inShiftedRun(0x30, 0x21), '가', 'a graphic pair is still read');
+});

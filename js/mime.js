@@ -13,7 +13,7 @@
 // makes the closing tally a lie), and the wording lives here, once, so the two
 // renderers cannot drift apart about what was read.
 
-import { decodeEncodedWords, decodeQuotedPrintable } from './decode.js';
+import { decodeEncodedWords, decodeMailCharset, decodeQuotedPrintable, mailOnlyCharset } from './decode.js';
 import { get, MAX_HEADER_BYTES, readHeaders } from './unfold.js';
 
 /**
@@ -352,7 +352,7 @@ function decodeBody(raw, encoding, charset, wantText) {
     // bytes that were never sent — the strictness rule js/decode.js already
     // follows for the same reason.
     const cleaned = raw.replace(/\s+/g, '');
-    if (/[^A-Za-z0-9+/=_-]/.test(cleaned)) return textVerbatim(raw, wantText);
+    if (/[^A-Za-z0-9+/=_-]/.test(cleaned)) return textVerbatim(raw, wantText, charset);
     const bytes = Math.floor(cleaned.replace(/=+$/, '').length * 3 / 4);
     // Clip the *encoded* form so the decoded result respects the ceiling; the
     // cut lands on a four-character group so the tail still decodes.
@@ -365,7 +365,7 @@ function decodeBody(raw, encoding, charset, wantText) {
     if (all === null) {
       // Not base64 despite the declaration. Kept as the text it visibly is —
       // refusing it entirely would hide content that is sitting in the clear.
-      return textVerbatim(raw, wantText);
+      return textVerbatim(raw, wantText, charset);
     }
     return { text: decodeCharset(all, charset), head: [...all.slice(0, HEAD_BYTES)], bytes, clipped };
   }
@@ -378,7 +378,7 @@ function decodeBody(raw, encoding, charset, wantText) {
     // ASCII by construction, so any character past it means the text is
     // already decoded and must be taken as it stands — running the byte cast
     // over it would destroy exactly the characters the decoding restored.
-    if (hasNonAscii(slice)) return textVerbatim(raw, wantText);
+    if (hasNonAscii(slice)) return textVerbatim(raw, wantText, charset);
     const latin1 = decodeQuotedPrintable(slice);
     const bytes = Uint8Array.from(latin1, (c) => c.charCodeAt(0) & 0xff);
     return {
@@ -389,7 +389,7 @@ function decodeBody(raw, encoding, charset, wantText) {
     };
   }
 
-  return textVerbatim(raw, wantText);
+  return textVerbatim(raw, wantText, charset);
 }
 
 /** Any codepoint past ASCII — text that cannot be undecoded wire bytes. */
@@ -401,11 +401,31 @@ function hasNonAscii(text) {
 }
 
 /** The part's content taken as the text it already is, ceiling applied. */
-function textVerbatim(raw, wantText) {
+function textVerbatim(raw, wantText, charset) {
   const clipped = raw.length > MAX_PART_TEXT;
   const slice = clipped ? raw.slice(0, MAX_PART_TEXT) : raw;
   const head = new TextEncoder().encode(slice.slice(0, HEAD_BYTES * 4)).slice(0, HEAD_BYTES);
-  return { text: wantText ? slice : null, head: [...head], bytes: raw.length, clipped };
+  return { text: wantText ? verbatimText(slice, charset) : null, head: [...head], bytes: raw.length, clipped };
+}
+
+/**
+ * Content that arrived without a transfer encoding is already characters — but
+ * not yet text, when the charset it declares is one of the 7-bit escape
+ * encodings.
+ *
+ * Those are exactly the charsets that need no transfer encoding, so this is
+ * where they arrive: `charset=utf-7` with `Content-Transfer-Encoding: 7bit` is
+ * the natural pairing, and it is the one path that never reached a charset at
+ * all. A phishing anchor written as `+ADw-a href…` sat here as one opaque
+ * token and the link card printed nothing.
+ *
+ * Guarded by the same rule as quoted-printable above: a character past ASCII
+ * means the paste is already-decoded text, and casting it back to bytes would
+ * destroy what the decoding restored.
+ */
+function verbatimText(slice, charset) {
+  if (!mailOnlyCharset(charset) || hasNonAscii(slice)) return slice;
+  return decodeMailCharset(Uint8Array.from(slice, (c) => c.charCodeAt(0)), charset) ?? slice;
 }
 
 function base64Bytes(input) {
@@ -427,8 +447,15 @@ function base64Bytes(input) {
  * that were not what the label said. A charset label TextDecoder does not
  * know falls back to UTF-8 — reading the bytes wrongly-but-inertly beats
  * refusing to read them at all.
+ *
+ * The charsets only mail declares get there first, in js/decode.js. TextDecoder
+ * refuses those on a browser's reasoning that does not reach this program, and
+ * inheriting the refusal meant reading a Korean body as ASCII noise.
  */
 function decodeCharset(bytes, charset) {
+  const mail = decodeMailCharset(bytes, charset);
+  if (mail !== null) return mail;
+
   let decoder;
   try {
     decoder = new TextDecoder(charset || 'utf-8', { fatal: false });

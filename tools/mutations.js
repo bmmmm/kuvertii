@@ -1333,4 +1333,52 @@ function el(tag, className, text) {
     // Without the skip, a URL inside a <script> block counts as a link the
     // reader could click — a claim about text no mail client ever shows.
   },
+
+  {
+    id: 'mail-only-charset-unread',
+    promise: 'A charset a mail client honours is decoded, whatever the browser\'s Encoding Standard says about it.',
+    file: 'js/decode.js',
+    find: `export function decodeMailCharset(bytes, label) {
+  const family = mailOnlyCharset(label);`,
+    replace: `export function decodeMailCharset() {
+  return null;
+}
+
+function decodeMailCharsetDisabledByMutation(bytes, label) {
+  const family = mailOnlyCharset(label);`,
+    mustKill: [
+      'a charset only mail uses reads as the message its 8-bit twin does',
+      'a charset the browser refuses but mail uses is read before the checks run',
+    ],
+    // TextDecoder refuses UTF-7 and maps ISO-2022-KR and HZ onto "replacement"
+    // — a browser decision this tool inherited into a place it never applies.
+    // Without the shim a phishing anchor written `+ADw-a href…` draws no link
+    // card, and a Korean attachment name ending .exe draws no warning.
+  },
+
+  {
+    id: 'mail-only-charset-skips-verbatim',
+    promise: 'A transfer encoding does not decide whether the declared charset is honoured.',
+    file: 'js/mime.js',
+    find: `  if (!mailOnlyCharset(charset) || hasNonAscii(slice)) return slice;`,
+    replace: `  return slice;`,
+    mustKill: ['a charset only mail uses reads as the message its 8-bit twin does'],
+    // These charsets are 7-bit, so they need no transfer encoding — which is
+    // the path that never reached a charset at all. `charset=utf-7` with
+    // `Content-Transfer-Encoding: 7bit` is the pairing a sender would write.
+  },
+
+  {
+    id: 'shifted-run-raises-control-bytes',
+    promise: 'Decoding a shifted run never promotes a control byte into a C1 introducer.',
+    file: 'js/decode.js',
+    find: `    const graphic = byte > 0x20 && byte < 0x7f;
+    out.push(shifted && graphic ? byte | 0x80 : byte);`,
+    replace: `    out.push(shifted ? byte | 0x80 : byte);`,
+    mustKill: ['a 7-bit charset never manufactures a control character out of a control byte'],
+    // 0x1B with the high bit raised is 0x9B, the C1 spelling of CSI — the
+    // introducer js/control.js exists because of. Measured: `SO ESC [ 2 J SI`
+    // grows a U+009B out of bytes that carried none, and the tool would then be
+    // reporting its own decoder's output as the sender's intent.
+  },
 ];
