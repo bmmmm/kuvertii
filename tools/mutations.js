@@ -1405,4 +1405,27 @@ function decodeMailCharsetDisabledByMutation(bytes, label) {
       'index.html says the reading happens after the fact',
     ],
   },
+
+  {
+    id: 'junk-verdict-rows-stay-neutral',
+    promise: 'An explicit junk verdict colours its row, and the card\'s tone with it.',
+    file: 'js/findings.js',
+    find: `    if (value) items.push({ label, value, level: verdict?.test(value) ? 'bad' : null });`,
+    replace: `    if (value) items.push({ label, value, level: null });`,
+    mustKill: ['an explicit junk verdict raises the card, red rows included'],
+    // Four headers on real iCloud junk said "junk" outright and the card
+    // rendered five neutral dots. The tone reads the rows, so rows that never
+    // colour kept the one card about the verdict permanently neutral.
+  },
+
+  {
+    id: 'suspected-spam-reads-yes-only',
+    promise: 'X-Suspected-Spam counts in the words iCloud writes, not only in ours.',
+    file: 'js/findings.js',
+    find: `  ['x-suspected-spam', 'Suspected spam', /^(?:yes|true)\\b/i],`,
+    replace: `  ['x-suspected-spam', 'Suspected spam', /^yes\\b/i],`,
+    mustKill: ['iCloud writes true rather than yes into X-Suspected-Spam'],
+    // The old test was written for the value we expected, not the value the
+    // provider sends: iCloud writes `true`, and `^yes` read that as nothing.
+  },
 ];

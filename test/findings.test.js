@@ -254,6 +254,41 @@ test('filter verdicts are collected', () => {
   assert.match(body, /JUNK/);
 });
 
+test('an explicit junk verdict raises the card, red rows included', () => {
+  // Four headers on real iCloud junk say "junk" outright, and the card used to
+  // render all of them as neutral dots — the one card whose subject is the
+  // verdict was the one card that never showed it.
+  const finding = byId('judgement');
+  assert.equal(finding.tone, 'alert');
+  assert.equal(finding.items.find((i) => i.label === 'Spam flag').level, 'bad');
+  assert.equal(finding.items.find((i) => i.label === 'Apple Mail action').level, 'bad');
+});
+
+test('iCloud writes true rather than yes into X-Suspected-Spam', () => {
+  // The `^yes` test read real iCloud junk as unremarkable; `true` is what the
+  // provider actually writes.
+  const finding = analyse(parseHeaders('X-Suspected-Spam: true\n'))
+    .find((f) => f.id === 'judgement');
+  assert.equal(finding.items[0].level, 'bad');
+  assert.equal(finding.tone, 'alert');
+});
+
+test('a flag set to no is not a verdict', () => {
+  const finding = analyse(parseHeaders('X-Spam-Flag: NO\nX-Spam-Status: No, score=-1.9\nX-Apple-Movetofolder: INBOX\n'))
+    .find((f) => f.id === 'judgement');
+  assert.equal(finding.tone, 'neutral');
+  assert.ok(finding.items.every((i) => i.level !== 'bad'));
+});
+
+test('a bare score is a number, not an opinion', () => {
+  // Neither Apple nor SpamAssassin state the threshold in the header, so no
+  // value of these fields alone colours a row.
+  const finding = analyse(parseHeaders('X-Icl-Score: 4.33304424423\nX-Spam-Score: 9.1\n'))
+    .find((f) => f.id === 'judgement');
+  assert.equal(finding.tone, 'neutral');
+  assert.ok(finding.items.every((i) => i.level === null));
+});
+
 test('the unsubscribe link is resolved and judged', () => {
   const finding = byId('unsubscribe');
   assert.ok(finding);

@@ -1928,17 +1928,35 @@ function splitOnce(text) {
 }
 
 /**
+ * The generic filter headers, each with the test for an explicit spam verdict
+ * where the field can carry one. Shared between the judgement card's rows and
+ * `wasFiledAsSpam`, so the row colour and the authentication lede's "filed it
+ * as junk" clause are one decision rather than two that drift apart.
+ *
+ * Deliberately narrow: a flag set to "no" is not a verdict, and the bare
+ * scores carry no test at all — neither Apple nor SpamAssassin state the
+ * threshold in the header, and a number without its scale is not an opinion.
+ * X-Suspected-Spam accepts `true` as well as `yes` because `true` is what
+ * iCloud actually writes; the old `^yes` test read real iCloud junk as
+ * unremarkable.
+ */
+const FILTER_VERDICTS = [
+  ['x-spam-flag', 'Spam flag', /^yes\b/i],
+  ['x-spam-status', 'Spam status', /^yes\b/i],
+  ['x-suspected-spam', 'Suspected spam', /^(?:yes|true)\b/i],
+  ['x-apple-action', 'Apple Mail action', /junk/i],
+  ['x-apple-movetofolder', 'Filed into folder', /junk|spam/i],
+  ['x-spam-score', 'Spam score', null],
+  ['x-icl-score', 'iCloud score', null],
+];
+
+/**
  * Did something along the way actually rule this message spam?
  *
- * Only used to decide whether the authentication card may say so. Deliberately
- * narrow: a flag set to "no" is not a verdict, and an SCL below 5 is Microsoft
- * saying the opposite.
+ * Only used to decide whether the authentication card may say so.
  */
 function wasFiledAsSpam(headers) {
-  if (/^yes\b/i.test(get(headers, 'x-spam-flag'))) return true;
-  if (/junk/i.test(get(headers, 'x-apple-action'))) return true;
-  if (/junk|spam/i.test(get(headers, 'x-apple-movetofolder'))) return true;
-  if (/^yes\b/i.test(get(headers, 'x-suspected-spam'))) return true;
+  if (FILTER_VERDICTS.some(([field, , verdict]) => verdict?.test(get(headers, field)))) return true;
 
   // The threat category rather than the SCL score. Microsoft's reference states
   // that on cloud mailboxes SCL "doesn't determine whether the message is
@@ -1951,19 +1969,10 @@ function wasFiledAsSpam(headers) {
 
 function judgementFinding(headers) {
   const items = [];
-  const interesting = [
-    ['x-spam-flag', 'Spam flag'],
-    ['x-spam-status', 'Spam status'],
-    ['x-suspected-spam', 'Suspected spam'],
-    ['x-apple-action', 'Apple Mail action'],
-    ['x-apple-movetofolder', 'Filed into folder'],
-    ['x-spam-score', 'Spam score'],
-    ['x-icl-score', 'iCloud score'],
-  ];
 
-  for (const [field, label] of interesting) {
+  for (const [field, label, verdict] of FILTER_VERDICTS) {
     const value = get(headers, field);
-    if (value) items.push({ label, value });
+    if (value) items.push({ label, value, level: verdict?.test(value) ? 'bad' : null });
   }
 
   items.push(...microsoftVerdicts(headers));
