@@ -1455,4 +1455,16 @@ function decodeMailCharsetDisabledByMutation(bytes, label) {
     // decided its folder.
   },
 
+  {
+    id: 'prose-paste-read-as-header',
+    promise: 'A paste in which no line was written as a field is read as the message text it is.',
+    file: 'js/mime.js',
+    find: `  if (!looksLikeHeaderBlock(headerText) && text.trim()
+    && (MARKUP_RE.test(text) || !carriesAnyLabelledField(headerText))) {`,
+    replace: `  if (!looksLikeHeaderBlock(headerText) && MARKUP_RE.test(text)) {`,
+    mustKill: ['prose with no labelled field is a body, not a mangled header'],
+    // With markup as the only body evidence, "Sehr geehrter Kunde," parsed as
+    // one unlabelled header fragment and the completeness card told the
+    // reader their message text looked like part of a header.
+  },
 ];

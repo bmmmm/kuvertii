@@ -112,6 +112,22 @@ export function looksLikeHeaderBlock(text) {
 }
 
 /**
+ * Does this block carry any field at all that was written as one?
+ *
+ * Same construction as looksLikeHeaderBlock — ask the real parser, because it
+ * is the one that knows `An:` is a To and that an unlabelled leading sender
+ * line becomes a From. A synthetic `(unlabelled)` entry does not count: that
+ * is the parser keeping a line it could not read as a field, which is exactly
+ * the reading this function exists to overrule.
+ */
+function carriesAnyLabelledField(text) {
+  const block = String(text ?? '');
+  if (!block.trim()) return false;
+  const { headers } = readHeaders(block.slice(0, MAX_HEADER_BYTES));
+  return headers.some((h) => !h.synthetic);
+}
+
+/**
  * Cut a paste into header text and body text.
  *
  * The paste decides the mode — there is no switch. A header block before the
@@ -139,7 +155,15 @@ export function splitMessage(raw) {
   const headerText = boundary === -1 ? text : lines.slice(0, boundary).join('\n');
   const bodyText = boundary === -1 ? '' : lines.slice(boundary + 1).join('\n');
 
-  if (!looksLikeHeaderBlock(headerText) && MARKUP_RE.test(text)) {
+  // Markup is strong body evidence, so one known field is enough to overrule
+  // it. Prose is weak evidence, so it flips only when the front block carries
+  // no labelled field at all — before that rule, a greeting parsed as one
+  // unlabelled fragment and the report told the reader their message text
+  // looked like part of a header, which it factually was not. An Apple Mail
+  // display-lines paste survives the rule: its leading `Name <addr>` line is
+  // promoted to a From by the parser this asks, and localised labels count.
+  if (!looksLikeHeaderBlock(headerText) && text.trim()
+    && (MARKUP_RE.test(text) || !carriesAnyLabelledField(headerText))) {
     return { headerText: '', bodyText: text, bodyOnly: true };
   }
   return { headerText, bodyText, bodyOnly: false };

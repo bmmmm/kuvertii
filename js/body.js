@@ -108,7 +108,7 @@ export function analyseBody(parts, { headers = [], bodyOnly = false } = {}) {
  * never happened and then ended.
  */
 function bodyOnlyNotice(bodyWasRead) {
-  const missing = 'Nothing above the content parsed as a header block, so the questions a header answers — who sent this, to whom, whether its authentication held, which route it took — cannot be answered here.';
+  const missing = 'This paste reads as the message content a mail program displays — nothing above it parsed as a header block. The questions a header answers — who sent this, to whom, whether its authentication held, which route it took — cannot be answered here.';
   const rest = bodyWasRead
     ? ' What the body itself says is read below.'
     : ' The body was not read either, so nothing below describes it.';
@@ -116,12 +116,18 @@ function bodyOnlyNotice(bodyWasRead) {
     id: 'body-only',
     title: 'A message body without its header',
     tone: 'info',
-    lede: `${missing}${rest} For the whole picture, paste the full "Show Original" / "View Source" output, header included.`,
-    items: [{
-      label: 'Missing with the header',
-      value: 'Sender, recipients, authentication verdicts, tracking identifiers, the delivery route — every finding that needs a header field.',
-      level: 'absent',
-    }],
+    lede: `${missing}${rest} The full header travels with every message, and mail programs keep it a menu away — paste what these show, whole:`,
+    items: [
+      {
+        label: 'Missing with the header',
+        value: 'Sender, recipients, authentication verdicts, tracking identifiers, the delivery route — every finding that needs a header field.',
+        level: 'absent',
+      },
+      // Menu paths rather than keyboard shortcuts, which drift per version.
+      { label: 'Apple Mail', value: 'View → Message → All Headers, or Raw Source for the whole message.' },
+      { label: 'Gmail (web)', value: 'Open the message → ⋮ More → "Show original", then copy the whole page.' },
+      { label: 'Outlook', value: 'Open the message → File → Properties → the "Internet headers" box.' },
+    ],
   };
 }
 

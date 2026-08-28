@@ -84,10 +84,32 @@ test('a localised header paste is still a header, not a body', () => {
   assert.equal(bodyOnly, false);
 });
 
-test('prose that merely mentions a colon stays on the header path', () => {
-  // Not header-like, not markup-shaped: the pre-existing behaviour (read it
-  // as a header, report honestly) is kept rather than guessed about.
-  const { bodyOnly } = splitMessage('note to self: buy milk\n\nsecond line');
+test('prose with no labelled field is a body, not a mangled header', () => {
+  // Revised 2026-08-28: this paste used to stay on the header path ("kept
+  // rather than guessed about"), and the report then told the reader their
+  // message text looked like part of a header — a factual claim about the
+  // paste that was false. A front block in which the parser finds no field
+  // written as one is not a header it could be a part of.
+  const prose = splitMessage('Sehr geehrter Kunde,\n\nBitte hier klicken: https://x.example/y\n');
+  assert.equal(prose.bodyOnly, true);
+  assert.match(prose.bodyText, /geehrter/, 'the greeting is body, not a header fragment');
+
+  const note = splitMessage('note to self: buy milk\n\nsecond line');
+  assert.equal(note.bodyOnly, true, 'a colon inside prose does not make a field');
+});
+
+test('a partial header of unknown but labelled fields is still a header', () => {
+  // The completeness card exists for exactly this paste. Only a front block
+  // with no labelled field at all flips to the body reading.
+  const { bodyOnly } = splitMessage('X-Icl-Score: 4.3\nX-Custom-Trace: abc\n');
+  assert.equal(bodyOnly, false);
+});
+
+test('an Apple Mail display-lines paste keeps its header reading', () => {
+  // The lines a client renders above the header block: an unlabelled sender
+  // line the parser promotes to a From. That promotion counts as a field
+  // written as one, so the paste is not mistaken for prose.
+  const { bodyOnly } = splitMessage('Auszahlungsstelle <x@y.example>\n\nText follows.');
   assert.equal(bodyOnly, false);
 });
 

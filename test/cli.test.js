@@ -75,15 +75,16 @@ test('a missing file fails with a message rather than a stack', async () => {
 });
 
 test('input that is not a header is reported, not crashed on', async () => {
-  // A stray line is kept as an unlabelled field — that is deliberate, since a
-  // copied header often loses the name of its Message-ID line. So the honest
-  // outcome here is "read it, found nothing", not a parse failure.
+  // Revised 2026-08-28: prose used to be kept as an unlabelled field and the
+  // report called it "part of a header, not all of it" — a factual claim
+  // about the paste that was false. It is now read as the message body it
+  // is, and the reader is told where their mail program keeps the header.
   const { code, stdout, stderr } = await cli([], 'just some prose with no colon-led fields\n');
   assert.equal(code, 0);
   assert.equal(stderr, '');
-  // It is read, and the reader is told plainly that this was not a header.
-  assert.match(stdout, /part of a header, not all of it/);
-  assert.match(stdout, /From is missing/);
+  assert.match(stdout, /A message body without its header/);
+  assert.match(stdout, /cannot be answered\s+here/, 'the wrap may fall inside the phrase');
+  assert.doesNotMatch(stdout, /part of a header, not all of it/);
 });
 
 test('empty stdin says so and exits non-zero', async () => {

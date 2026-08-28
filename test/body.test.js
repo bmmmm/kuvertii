@@ -223,6 +223,16 @@ test('the notice does not promise a reading that did not happen', () => {
   assert.match(findings[0].lede, /nothing below describes it/);
 });
 
+test('the notice says where mail programs keep the header', () => {
+  // "Paste the full output" without saying where to find it left the reader
+  // exactly where they started. Menu paths, not shortcuts — those drift.
+  const [notice] = analyseBody([], { bodyOnly: true });
+  const labels = notice.items.map((i) => i.label);
+  for (const client of ['Apple Mail', 'Gmail (web)', 'Outlook']) {
+    assert.ok(labels.includes(client), `${client} is named`);
+  }
+});
+
 test('a fault in the body costs the body sections, each reported by its own guard', () => {
   // Fault isolation is inherited from guardSection; a part whose text is a
   // getter that throws is the cheapest way to prove the boundary holds. Both
