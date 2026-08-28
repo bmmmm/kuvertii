@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { analyseBody } from '../js/body.js';
-import { ALL_CLEAR_TITLE, analyse } from '../js/findings.js';
+import { ALL_CLEAR_TITLE, analyse, PASSED_BUT_JUNK_TITLE } from '../js/findings.js';
 import { parseParts, splitMessage } from '../js/mime.js';
 import { createRenderer } from '../js/terminal.js';
 import { parseHeaders } from '../js/unfold.js';
@@ -56,9 +56,14 @@ test('"every check passed" is never printed over a check that did not', () => {
     const notPassed = DECISIVE.filter((m) => verdicts[m] && verdicts[m] !== 'pass');
     if (!notPassed.length) continue;
 
-    const auth = analyse(parseHeaders(header)).find((f) => f.id === 'auth');
-    if (auth?.title === ALL_CLEAR_TITLE) {
-      offenders.push(`${JSON.stringify(verdicts)} — ${notPassed.map((m) => `${m}=${verdicts[m]}`).join(', ')}`);
+    // Both spellings of the headline make the claim, so both are refused —
+    // and the junk-filed spelling is only reachable under a filter verdict,
+    // so every combination is also run with one.
+    for (const message of [header, `X-Spam-Flag: yes\n${header}`]) {
+      const auth = analyse(parseHeaders(message)).find((f) => f.id === 'auth');
+      if (auth?.title === ALL_CLEAR_TITLE || auth?.title === PASSED_BUT_JUNK_TITLE) {
+        offenders.push(`${JSON.stringify(verdicts)} — ${notPassed.map((m) => `${m}=${verdicts[m]}`).join(', ')}`);
+      }
     }
   }
 
@@ -74,6 +79,7 @@ test('a composite-authentication failure also disqualifies "every check passed"'
     const auth = analyse(parseHeaders(header)).find((f) => f.id === 'auth');
     if (compauth === 'fail') {
       assert.notEqual(auth.title, ALL_CLEAR_TITLE, 'compauth=fail was titled as a clean pass');
+      assert.notEqual(auth.title, PASSED_BUT_JUNK_TITLE, 'nor as a clean pass that was filed as junk');
       assert.equal(auth.tone, 'alert');
     }
   }

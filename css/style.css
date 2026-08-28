@@ -157,7 +157,12 @@ button.primary {
   border-radius: 6px;
 }
 
-.card--alert { border-left-color: var(--bad); }
+/* An alert card is tinted and titled like its bad rows, not just edged: the
+   left border alone read as routine at the glance most cards get, and the
+   terminal renderer already paints an alert title red. Same tokens as
+   .item--bad, so light and dark are both covered by the existing palette. */
+.card--alert { border-left-color: var(--bad); background: var(--bad-bg); }
+.card--alert .card__title { color: var(--bad); }
 .card--info { border-left-color: var(--accent); }
 
 .card__title {

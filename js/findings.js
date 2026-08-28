@@ -88,7 +88,19 @@ export function analyse(headers) {
   push('origin', () => originFinding(headers));
   push('authentication', () => authFinding(headers));
   push('route', () => routeFinding(headers));
-  push('judgement', () => judgementFinding(headers));
+
+  // An alert judgement leads instead of footnoting: a filter's junk ruling
+  // qualifies every card below it the way completeness qualifies the paste,
+  // and the reader is owed it before the authentication card reports passes.
+  // Read off the card's own tone, so this decision cannot drift from the one
+  // the rows already made. A judgement carrying no verdict — scores, a flag
+  // set to "no" — stays at the end, a footnote about opinions.
+  const judgement = guardSection('judgement', () => judgementFinding(headers));
+  if (judgement) {
+    const at = findings.findIndex((f) => f.id === 'completeness') + 1;
+    if (judgement.tone === 'alert') findings.splice(at, 0, judgement);
+    else findings.push(judgement);
+  }
 
   // Both are computed last and read first. They qualify every finding above
   // them — if part of this report was written by the sender rather than derived
@@ -1065,6 +1077,17 @@ function originFinding(headers) {
 export const ALL_CLEAR_TITLE = 'Every check passed. That proves less than it sounds.';
 
 /**
+ * The same all-pass headline for a message the mailbox provider still filed
+ * as junk. The lede already said so, but a lede is not what a glance reads —
+ * the headline is, and on a junk-filed message the plain all-clear headline
+ * was the loudest sentence on the report saying the opposite of the filing.
+ * Exported for the same reason ALL_CLEAR_TITLE is, and every invariant that
+ * refuses to print "every check passed" over a failure covers both titles,
+ * because both make that claim.
+ */
+export const PASSED_BUT_JUNK_TITLE = 'Every check passed. It still went to the junk folder.';
+
+/**
  * A DKIM `t=`/`x=` value as a Date, or null when it is not a time at all.
  *
  * Both tags are decimal seconds and the sender writes them. The pattern that
@@ -1709,7 +1732,7 @@ function authFinding(headers) {
   return {
     id: 'auth',
     title: allPass
-      ? ALL_CLEAR_TITLE
+      ? (wasFiledAsSpam(headers) ? PASSED_BUT_JUNK_TITLE : ALL_CLEAR_TITLE)
       : failed.length
         ? 'The sender\'s identity did not check out'
         : 'Authentication results',

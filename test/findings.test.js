@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { ALL_CLEAR_TITLE, analyse, guardSection } from '../js/findings.js';
+import { ALL_CLEAR_TITLE, analyse, guardSection, PASSED_BUT_JUNK_TITLE } from '../js/findings.js';
 import { parseHeaders } from '../js/unfold.js';
 import { BULK_HEADER, MICROSOFT_HEADER, RECIPIENT } from './fixtures.js';
 
@@ -228,7 +228,9 @@ test('no reply-to finding when it merely differs in subdomain', () => {
 test('passing authentication is reported without being mistaken for safety', () => {
   const finding = byId('auth');
   assert.ok(finding);
-  assert.match(finding.title, /proves less/i);
+  // The fixture carries a junk filing, so the all-pass headline arrives in
+  // the spelling that says so.
+  assert.equal(finding.title, PASSED_BUT_JUNK_TITLE);
   assert.match(finding.lede, /do not ask whether the mail is wanted|never ask/i);
 
   const body = text(finding);
@@ -287,6 +289,34 @@ test('a bare score is a number, not an opinion', () => {
     .find((f) => f.id === 'judgement');
   assert.equal(finding.tone, 'neutral');
   assert.ok(finding.items.every((i) => i.level === null));
+});
+
+test('a junk filing takes over the all-clear headline', () => {
+  // The lede said it; the headline — the sentence a glance actually reads —
+  // still announced a plain all-clear over a message the provider had junked.
+  assert.equal(byId('auth').title, PASSED_BUT_JUNK_TITLE, 'the fixture carries a verdict');
+
+  const clean = parseHeaders(
+    'From: a@example.org\nTo: b@example.net\n'
+    + 'Authentication-Results: mx.example.net; spf=pass; dkim=pass; dmarc=pass\n',
+  );
+  assert.equal(analyse(clean).find((f) => f.id === 'auth').title, ALL_CLEAR_TITLE,
+    'a message nobody junked keeps the plain headline');
+});
+
+test('an alert judgement leads the report instead of footnoting it', () => {
+  const ids = report().map((f) => f.id);
+  assert.ok(ids.indexOf('judgement') < ids.indexOf('auth'),
+    'the filing precedes the passes it qualifies');
+
+  // The paste's own qualification still comes first when there is one.
+  const partial = analyse(parseHeaders('X-Spam-Flag: yes\nX-Apple-Action: JUNK/Junk\n'))
+    .map((f) => f.id);
+  assert.equal(partial[partial.indexOf('completeness') + 1], 'judgement');
+
+  // A judgement carrying no verdict stays where it was: a footnote.
+  const scores = analyse(parseHeaders('From: a@b.example\nX-Icl-Score: 4.3\n'));
+  assert.equal(scores[scores.length - 1].id, 'judgement');
 });
 
 test('the unsubscribe link is resolved and judged', () => {

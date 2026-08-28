@@ -1428,4 +1428,31 @@ function decodeMailCharsetDisabledByMutation(bytes, label) {
     // The old test was written for the value we expected, not the value the
     // provider sends: iCloud writes `true`, and `^yes` read that as nothing.
   },
+
+  {
+    id: 'junk-headline-reads-all-clear',
+    promise: 'A junk-filed all-pass is titled as one, not as a plain all-clear.',
+    file: 'js/findings.js',
+    find: `      ? (wasFiledAsSpam(headers) ? PASSED_BUT_JUNK_TITLE : ALL_CLEAR_TITLE)`,
+    replace: `      ? ALL_CLEAR_TITLE`,
+    mustKill: ['a junk filing takes over the all-clear headline'],
+    // The lede carried the junk clause; the headline — the sentence a glance
+    // actually reads — still announced a plain all-clear over a message the
+    // provider had filed as junk.
+  },
+
+  {
+    id: 'alert-judgement-stays-a-footnote',
+    promise: 'A judgement carrying a verdict leads the report; only a verdict-free one is a footnote.',
+    file: 'js/findings.js',
+    find: `    const at = findings.findIndex((f) => f.id === 'completeness') + 1;
+    if (judgement.tone === 'alert') findings.splice(at, 0, judgement);
+    else findings.push(judgement);`,
+    replace: `    findings.push(judgement);`,
+    mustKill: ['an alert judgement leads the report instead of footnoting it'],
+    // With the card at the bottom, a junk-filed message read top-down as
+    // passes and routes first and only ended on the ruling that had already
+    // decided its folder.
+  },
+
 ];
