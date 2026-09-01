@@ -125,8 +125,32 @@ function bodyOnlyNotice(bodyWasRead) {
       },
       // Menu paths rather than keyboard shortcuts, which drift per version.
       { label: 'Apple Mail', value: 'View → Message → All Headers, or Raw Source for the whole message.' },
+      // The desktop apps above all have a raw view; their phone apps do not,
+      // so each gets its own row rather than a caveat buried in the desktop
+      // one — a reader on a phone is looking for their app's name, not a
+      // footnote under somebody else's.
+      {
+        label: 'iPhone Mail',
+        value: 'No raw view: drag the message onto a minimised compose window — it attaches as an .eml, saved from there to Files. On iPad, drag it into Files directly in Split View.',
+      },
       { label: 'Gmail (web)', value: 'Open the message → ⋮ More → "Show original", then copy the whole page.' },
+      {
+        label: 'Gmail app',
+        value: 'No "Show original" here: open mail.google.com in a browser, request the desktop site, then ⋮ More → "Show original" → Download original.',
+      },
       { label: 'Outlook', value: 'Open the message → File → Properties → the "Internet headers" box.' },
+      {
+        label: 'Outlook app',
+        value: 'No such menu in the app either: open Outlook on the web (desktop site) → More actions → Save as → .eml.',
+      },
+      {
+        label: 'Proton app',
+        value: '⋮ → View headers → Share, which gives the header alone, not the full message.',
+      },
+      {
+        label: 'An .eml file already in hand',
+        value: 'This tool reads it directly — no header to copy, no menu to hunt for.',
+      },
     ],
   };
 }

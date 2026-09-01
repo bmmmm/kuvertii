@@ -233,6 +233,20 @@ test('the notice says where mail programs keep the header', () => {
   }
 });
 
+test('the notice tells a phone reader where the raw message hides', () => {
+  // The desktop menu paths above are unreachable from a phone: none of these
+  // apps expose a raw view there. A reader on a phone needs their own app
+  // named, not a hunt through desktop instructions that do not apply.
+  const [notice] = analyseBody([], { bodyOnly: true });
+  const labels = notice.items.map((i) => i.label);
+  for (const client of ['iPhone Mail', 'Gmail app', 'Outlook app', 'Proton app']) {
+    assert.ok(labels.includes(client), `${client} is named`);
+  }
+  const byLabel = Object.fromEntries(notice.items.map((i) => [i.label, i.value]));
+  assert.match(byLabel['iPhone Mail'], /\.eml/);
+  assert.match(byLabel['iPhone Mail'], /iPad/);
+});
+
 test('a fault in the body costs the body sections, each reported by its own guard', () => {
   // Fault isolation is inherited from guardSection; a part whose text is a
   // getter that throws is the cheapest way to prove the boundary holds. Both

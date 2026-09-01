@@ -1467,4 +1467,20 @@ function decodeMailCharsetDisabledByMutation(bytes, label) {
     // one unlabelled header fragment and the completeness card told the
     // reader their message text looked like part of a header.
   },
+
+  {
+    id: 'body-only-notice-names-a-phone-path',
+    promise: 'The body-only notice tells a phone reader how to get at the raw message too, not only a desktop reader.',
+    file: 'js/body.js',
+    find: `      {
+        label: 'iPhone Mail',
+        value: 'No raw view: drag the message onto a minimised compose window — it attaches as an .eml, saved from there to Files. On iPad, drag it into Files directly in Split View.',
+      },`,
+    replace: '',
+    mustKill: ['the notice tells a phone reader where the raw message hides'],
+    // Every desktop menu path above assumes a desktop app. None of the four
+    // mail apps most readers carry in a pocket expose a raw view there, and a
+    // notice that only ever named the desktop path left a phone reader with
+    // instructions for a program they were not looking at.
+  },
 ];
