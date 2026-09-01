@@ -304,7 +304,7 @@ No build step, no dependencies. Node is used only to run the tests and to bake
 the blocklist.
 
 ```sh
-node --test                          # 452 tests, stdlib only
+node --test                          # the whole suite, stdlib only
 node tools/mutate.mjs                # breaks each promise, checks the suite notices
 node tools/promises.mjs              # what is promised, and what would catch it breaking
 node tools/build-blocklist.mjs       # writes data/ (gitignored, built in CI)
@@ -320,6 +320,10 @@ loopback-only and serves an allowlist.
 
 `tools/build-blocklist.mjs` also accepts a path to an already-downloaded feed,
 so the build can be reproduced and inspected without network access.
+
+`js/psl.js` no longer needs a manual refresh: `.github/workflows/psl.yml` runs
+`tools/build-psl.mjs` monthly and commits the result. The script still works
+exactly the same when run locally.
 
 Put local test headers in `samples/` — it is gitignored precisely because a real
 header contains a real address.
