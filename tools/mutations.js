@@ -1550,8 +1550,8 @@ function decodeMailCharsetDisabledByMutation(bytes, label) {
     id: 'file-decoded-by-the-browser',
     promise: 'A message file is decoded by this tool, byte for byte, never by the browser\'s UTF-8 default.',
     file: 'js/app.js',
-    find: `  input.value = textFromMessageBytes(new Uint8Array(await file.arrayBuffer()));`,
-    replace: `  input.value = new TextDecoder().decode(new Uint8Array(await file.arrayBuffer()));`,
+    find: `    text = textFromMessageBytes(new Uint8Array(await file.arrayBuffer()));`,
+    replace: `    text = new TextDecoder().decode(new Uint8Array(await file.arrayBuffer()));`,
     mustKill: ['a file in a legacy charset is read as the sender wrote it, not as U+FFFD'],
     // Found in review on the day the file button shipped: `file.text()` wrote
     // U+FFFD over every byte of a latin-1 8bit body before js/mime.js saw one,
@@ -1658,12 +1658,11 @@ function decodeMailCharsetDisabledByMutation(bytes, label) {
     id: 'file-read-rejection-unhandled',
     promise: 'A file this page cannot read is said to be unread, not passed over in silence.',
     file: 'js/app.js',
-    find: `    return;
-  }
-  input.value = text;`,
-    replace: `    throw error;
-  }
-  input.value = text;`,
+    // Anchored on the handling itself, not on the lines after it: the first
+    // anchor here was `return; } input.value = text;`, which a later edit two
+    // lines away silently invalidated.
+    find: "    status.textContent = `That file could not be read, so nothing on this page is about it. Try opening it again, or paste the message instead. (${error?.name || 'the read failed'})`;\n    return;",
+    replace: '    throw error;',
     mustKill: ['a file that will not be read is reported as unread, by either route'],
     // Both call sites invoke this as a bare statement, so a rethrow is an
     // unhandled rejection: nothing changes on screen and the previous report

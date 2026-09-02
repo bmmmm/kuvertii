@@ -11,7 +11,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { readFileSync } from 'node:fs';
+
 import { classifyRun } from '../tools/mutate.mjs';
+import { MUTATIONS } from '../tools/mutations.js';
 
 test('a run that reached a verdict is killed or survived by its status', () => {
   // The suite ran to completion (a plan line, or at least one failure): a
@@ -32,4 +35,29 @@ test('a run that never reached a verdict is inconclusive, never a survivor', () 
   // A clean exit with no plan is still inconclusive — a spawn that produced no
   // output at all cannot have run the tests, whatever code it returned.
   assert.equal(classifyRun({ status: 0, ranToCompletion: false }), 'inconclusive');
+});
+
+test('every mutation still anchors on exactly one place in its file', () => {
+  // A registry entry finds its line by text, so any edit near that line can
+  // orphan it — and until now nothing said so. `mutate.mjs` throws when it
+  // reaches a dead anchor, which means the news arrives twenty minutes into a
+  // sweep, on the one CI job that runs it, and only for the mutations before
+  // it in the list. Two anchors were orphaned in a single session that way,
+  // both by edits two lines from the anchor, and both looked fine because the
+  // mutation had been run by id before the edit rather than after it.
+  //
+  // Exactly one, not at least one: mutate.mjs replaces every occurrence, so a
+  // find that matches twice is a mutation whose meaning nobody chose.
+  const cache = new Map();
+  const source = (file) => {
+    if (!cache.has(file)) cache.set(file, readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'));
+    return cache.get(file);
+  };
+
+  const wrong = MUTATIONS
+    .map((m) => ({ id: m.id, file: m.file, hits: source(m.file).split(m.find).length - 1 }))
+    .filter(({ hits }) => hits !== 1)
+    .map(({ id, file, hits }) => `${id} matches ${hits}x in ${file}`);
+
+  assert.deepEqual(wrong, []);
 });
