@@ -29,6 +29,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       # The floor declared in package.json engines, and the version the deploy
       # actually runs on. A floor nothing exercises is a guess.
@@ -55,6 +56,7 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
       pages: write
