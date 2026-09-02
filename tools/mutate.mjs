@@ -94,13 +94,24 @@ function applyMutation(root, mutation) {
 }
 
 /** Every test name the run reported as failing, from the TAP stream. */
-function runSuite(root) {
+/**
+ * Run the suite in `root`, with `applied` naming the mutation in force.
+ *
+ * The name is passed on to the suite because one test in it — the registry's
+ * own anchor check — reads the code the registry points at. Under a mutation
+ * that code has been rewritten on purpose, so without being told which entry is
+ * in force that test goes red for every mutation, and a mutation nothing
+ * catches then reports KILLED anyway. That is not a noisy gate, it is a gate
+ * that has quietly stopped answering the only question the sweep asks.
+ */
+function runSuite(root, applied = '') {
   let stdout = '';
   let status = 0;
   try {
     stdout = execFileSync(process.execPath, ['--test', '--test-reporter=tap'], {
       cwd: root,
       encoding: 'utf8',
+      env: { ...process.env, KUVERTII_APPLIED_MUTATION: applied },
       maxBuffer: 64 * 1024 * 1024,
       stdio: ['ignore', 'pipe', 'pipe'],
       // node:test has no per-test timeout by default, so the natural mutation
@@ -154,10 +165,10 @@ export function classifyRun({ status, ranToCompletion }) {
  * that genuinely hangs costs three timeouts and still ends inconclusive, which
  * is the honest answer: it never turns into a false KILLED or a false SURVIVED.
  */
-function runSuiteToVerdict(root, attempts = 3) {
+function runSuiteToVerdict(root, applied, attempts = 3) {
   let last;
   for (let i = 0; i < attempts; i++) {
-    last = runSuite(root);
+    last = runSuite(root, applied);
     if (last.ranToCompletion) break;
   }
   return last;
@@ -207,7 +218,7 @@ function main() {
     try {
       copyTree(files, workspace);
       applyMutation(workspace, mutation);
-      const run = runSuiteToVerdict(workspace);
+      const run = runSuiteToVerdict(workspace, mutation.id);
       const { failed } = run;
 
       const outcome = classifyRun(run);
@@ -235,6 +246,10 @@ function main() {
         process.stdout.write(`         ${paint(DIM, `${failed.length} test${failed.length === 1 ? '' : 's'} went red`)}\n`);
         if (!byIntendedTest.length) {
           process.stdout.write(`         ${paint(YELLOW, 'but none of the tests named in mustKill — check the mutation is behavioural, not a syntax error')}\n`);
+          // Which ones, not just "not those". Without this the message says a
+          // stranger killed the mutation and refuses to name them, which on a
+          // machine you cannot reach is the end of the investigation.
+          for (const name of failed.slice(0, 5)) process.stdout.write(`         ${paint(DIM, `red: ${name}`)}\n`);
         }
       } else if (inconclusive) {
         process.stdout.write(`         ${paint(YELLOW, 'the suite never reached a verdict across three tries — a timeout or a failed spawn, not a survivor. Re-run before trusting the summary.')}\n`);

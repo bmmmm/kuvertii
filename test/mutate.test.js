@@ -54,7 +54,16 @@ test('every mutation still anchors on exactly one place in its file', () => {
     return cache.get(file);
   };
 
+  // The one entry a mutation run has deliberately rewritten is not orphaned,
+  // it is applied. Checking it anyway made this test go red under every single
+  // mutation — which sounds like noise and is not: a mutation that no test
+  // catches would then have been reported KILLED by this one, and the sweep
+  // would have answered "nothing is unguarded" without being able to say
+  // otherwise. mutate.mjs names it in the environment.
+  const applied = process.env.KUVERTII_APPLIED_MUTATION || null;
+
   const wrong = MUTATIONS
+    .filter((m) => m.id !== applied)
     .map((m) => ({ id: m.id, file: m.file, hits: source(m.file).split(m.find).length - 1 }))
     .filter(({ hits }) => hits !== 1)
     .map(({ id, file, hits }) => `${id} matches ${hits}x in ${file}`);
