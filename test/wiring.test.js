@@ -212,18 +212,36 @@ test('the zero-dependency claim is enforced, not merely true today', () => {
   }
 });
 
-test('the page assigns only the four node properties it has decided about', () => {
+test('the page assigns only the node properties it has decided about', () => {
   // The sink check above bans the names somebody thought of — innerHTML,
   // setAttribute, srcdoc. It did not ban `link.href = value`, because nobody
   // thought of that one, and an anchor built from header text would have
   // rendered a phishing destination as a live click target with the whole suite
   // green. Enumerating dangerous sinks is the wrong shape: the list of ways to
   // reach the DOM is the platform's and it grows, while the list of properties
-  // this page needs is ours and is four items long.
+  // this page needs is ours and is short.
   //
-  // So the assertion runs the other way. Anything outside the four fails, and
-  // whoever adds the fifth has to say here what it is for.
-  const ALLOWED = new Set(['className', 'hidden', 'textContent', 'value']);
+  // So the assertion runs the other way. Anything outside the list fails, and
+  // whoever adds the next one has to say here what it is for.
+  //
+  //   className, hidden, textContent, value — the four the renderer has always
+  //     needed: everything shown goes through textContent.
+  //   open      — a `<details>` card starts expanded or collapsed by screen
+  //     width, and a jump opens the one it points at. State, not markup.
+  //   tabIndex  — -1 on every card and on the overview, so focus can be moved
+  //     into them without putting eleven containers in the tab order.
+  //   ariaLabel — the reflected property, which is how this file reaches an
+  //     attribute at all now that setAttribute is banned above. A fixed string
+  //     of ours; no header text is ever assigned to it.
+  //   type      — 'button' on the jump buttons, so a created button cannot
+  //     default to submit.
+  //
+  // None of the four new ones can carry a URL to a click target, which is what
+  // this gate is for: href, src, action, formAction and srcdoc all still fail.
+  const ALLOWED = new Set([
+    'className', 'hidden', 'textContent', 'value',
+    'open', 'tabIndex', 'ariaLabel', 'type',
+  ]);
   const assigned = new Set();
 
   for (const [, property] of code(read('js/app.js')).matchAll(/\.\s*([A-Za-z_$][\w$]*)\s*(?:=[^=]|\+=)/g)) {

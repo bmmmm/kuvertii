@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- The stylesheet answers `prefers-color-scheme` on its own, but the browser
+     paints the form controls and the scrollbar before it reads a single rule.
+     Without this the dark page opens with a white textarea. -->
+<meta name="color-scheme" content="light dark">
 <!-- `require-trusted-types-for` turns "this page never writes untrusted text to
      innerHTML" from a rule we keep into one the browser keeps: with no policy
      allowed, any assignment to a DOM sink throws rather than rendering. It is
@@ -23,16 +27,42 @@
     <p class="tagline">An email header is a shipping label with the interesting parts written in a language nobody reads — and the body carries the links you would actually click. Paste the whole message in.</p>
   </header>
 
-  <section class="input-area">
+  <section class="input-area" id="input-area">
     <label class="visually-hidden" for="header-input">Email header</label>
     <textarea id="header-input" rows="10" spellcheck="false" autocomplete="off"
               autocapitalize="off" autocorrect="off"
-              placeholder="Paste the whole message — header and body — or just the header.&#10;&#10;Gmail: ⋮ → Show original&#10;Apple Mail: View → Message → Raw Source&#10;Outlook: File → Properties → Internet headers&#10;Thunderbird: Ctrl+U"></textarea>
+              placeholder="Paste the whole message — header and body — or just the header.&#10;Or open an .eml file."></textarea>
     <div class="controls">
       <button id="analyse" type="button" class="primary">Read it</button>
       <button id="clear" type="button">Clear</button>
+      <button id="open-file" type="button">Open a file…</button>
+      <!-- The file never leaves the tab: it is read with `file.text()` into the
+           same variable a paste lands in. Hidden because a bare file control
+           says "Choose File" and shows the name of the message afterwards,
+           which is one more place the reader's mail is written down. -->
+      <label class="visually-hidden" for="file-input">Message file</label>
+      <input type="file" id="file-input" accept=".eml,.txt,.msg,message/rfc822" class="visually-hidden">
       <span id="status" class="status" role="status" aria-live="polite"></span>
     </div>
+
+    <details class="guide">
+      <summary>Where to find the raw message</summary>
+      <h3>On a computer</h3>
+      <ul>
+        <li>Gmail — ⋮ → Show original</li>
+        <li>Apple Mail — View → Message → Raw Source</li>
+        <li>Outlook — File → Properties → Internet headers</li>
+        <li>Thunderbird — Ctrl+U</li>
+      </ul>
+      <h3>On a phone</h3>
+      <p>No mail app on a phone shows a raw message, so each of these is a detour around the app rather than a setting inside it.</p>
+      <ul>
+        <li>iPhone Mail has no raw view. Drag the message onto a minimised compose window: it attaches as an <code>.eml</code> you can save to Files and open here. On an iPad, drag it into Files in Split View.</li>
+        <li>The Gmail app has no Show original. Open <code>mail.google.com</code> in the browser, request the desktop site, then ⋮ → Show original → Download original.</li>
+        <li>The Outlook app has none either. Outlook on the web, desktop site → More actions → Save as → <code>.eml</code>.</li>
+        <li>Proton's app has ⋮ → View headers → Share. That gives the header alone, so every body finding will be missing.</li>
+      </ul>
+    </details>
   </section>
 
   <section id="empty-state" class="empty">

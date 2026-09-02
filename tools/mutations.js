@@ -546,12 +546,12 @@ export function identifySender(`,
 
 function el(tag, className, text) {
   const node = document.createElement(tag);`,
-    mustKill: ['the page assigns only the four node properties it has decided about'],
+    mustKill: ['the page assigns only the node properties it has decided about'],
     // Was a known gap: the sink regex banned the names somebody thought of and
     // not property assignment, so `link.href = …` was invisible to it. The
-    // check now runs the other way — four allowed properties, anything else
+    // check now runs the other way — an allowlist of properties, anything else
     // fails — because the list of ways to reach the DOM is the platform's and
-    // grows, while the list this page needs is ours and is four items long.
+    // grows, while the list this page needs is ours and is written down.
   },
 
   {
@@ -1482,5 +1482,67 @@ function decodeMailCharsetDisabledByMutation(bytes, label) {
     // mail apps most readers carry in a pocket expose a raw view there, and a
     // notice that only ever named the desktop path left a phone reader with
     // instructions for a program they were not looking at.
+  },
+
+  {
+    id: 'paste-needs-a-second-click',
+    promise: 'Pasting a message reads it — the button is for text that was edited.',
+    file: 'js/app.js',
+    find: `input.addEventListener('paste', () => {`,
+    replace: `input.addEventListener('paste-disabled-by-mutation', () => {`,
+    mustKill: ['a paste reads the message without a second click'],
+    // A paste is the whole gesture on this page. Asking for a click afterwards
+    // is asking the reader to confirm what they just did — and on a phone the
+    // button is below the fold of the field they pasted into.
+  },
+
+  {
+    id: 'report-left-below-the-fold',
+    promise: 'A finished report is brought into view and takes focus with it.',
+    file: 'js/app.js',
+    find: `  overview.scrollIntoView({ block: 'start' });
+  overview.focus();`,
+    replace: `  void overview;`,
+    mustKill: ['a finished report is brought into view rather than left below the fold'],
+    // Without it a phone reader taps Read it, the page silently grows eleven
+    // cards below the fold, the viewport has not moved and focus is on the
+    // body — indistinguishable, from where they are standing, from nothing
+    // having happened.
+  },
+
+  {
+    id: 'jump-leaves-the-card-closed',
+    promise: 'A jump opens the card it points at before scrolling to it.',
+    file: 'js/app.js',
+    find: `      if (collapsible) card.open = true;`,
+    replace: `      // opening the target removed by mutation`,
+    mustKill: ['a jump opens a collapsed card, scrolls to it and puts focus in it'],
+    // Scrolling a collapsed card into view lands the reader on a closed box
+    // with the title they just tapped on it, and leaves them to guess that the
+    // finding needs a second tap.
+  },
+
+  {
+    id: 'alert-cards-collapse-too',
+    promise: 'An alert card is never collapsed; only notes and neutral cards fold.',
+    file: 'js/app.js',
+    find: `  const collapsible = finding.tone !== 'alert';`,
+    replace: `  const collapsible = true;`,
+    mustKill: ['an alert card is never one of the foldable ones'],
+    // Folding by width alone reads as tidiness and costs the one thing the
+    // reader came for: on a phone the alert would arrive shut, behind a tap,
+    // among ten notes that look exactly like it.
+  },
+
+  {
+    id: 'file-read-uncapped',
+    promise: 'A file larger than 32 MB is refused with a sentence, not read.',
+    file: 'js/app.js',
+    find: `  if (file.size > MAX_FILE_BYTES) {`,
+    replace: `  if (false && file.size > MAX_FILE_BYTES) {`,
+    mustKill: ['a file too large to be a message is refused rather than read'],
+    // The same ceiling the CLI puts on the clipboard. Past it `file.text()`
+    // hands the tab a string it cannot hold, and the page stops answering with
+    // no message on screen saying why.
   },
 ];

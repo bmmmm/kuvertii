@@ -123,6 +123,52 @@ button.primary {
   font-size: 0.85rem;
 }
 
+/* Once a report exists the raw header is no longer what the reader is looking
+   at, and ten rows of it push the findings off a phone screen. Three rows keep
+   the paste visible — proof it went in — without costing the report its place.
+   4.5em is three of the textarea's own lines, so this survives the font-size
+   bump under `pointer: coarse` below. */
+.input-area--read textarea {
+  height: calc(4.5em + 1.8rem);
+  transition: height 0.18s ease;
+}
+
+/* A drop target has to say so before the file is let go, or the reader is
+   guessing whether the page will take it or navigate away from it. */
+.input-area--drop {
+  outline: 2px dashed var(--accent);
+  outline-offset: 6px;
+  border-radius: 6px;
+}
+
+/* ---------------------------------------------------------- source guide */
+
+.guide {
+  margin-top: 0.9rem;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+.guide > summary {
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.guide > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.guide h3 {
+  margin: 0.9rem 0 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.guide p { margin: 0.4rem 0 0; text-wrap: pretty; }
+.guide ul { margin: 0.35rem 0 0; padding-left: 1.1rem; }
+.guide li { margin-top: 0.25rem; text-wrap: pretty; }
+
 /* ---------------------------------------------------------- empty state */
 
 .empty { margin-top: 2.5rem; }
@@ -145,6 +191,57 @@ button.primary {
   color: var(--ink-soft);
   text-wrap: pretty;
 }
+
+/* ------------------------------------------------------------- overview */
+
+/* The report's table of contents. Eleven cards are a scroll with no shape on a
+   phone; this says how many there are and what they are called before the
+   reader has moved. It is also where the page puts focus after a run. */
+.overview {
+  margin-top: 1.5rem;
+  padding: 0.85rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+}
+
+.overview:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.overview__tally {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+.overview__jumps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.6rem;
+}
+
+.overview__jump {
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  text-align: left;
+  /* A card title can be longer than a phone is wide. */
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+/* Tinted from the same tokens as the cards they point at, so the overview and
+   the report cannot disagree about which finding is the alarming one. */
+.overview__jump--alert {
+  border-color: var(--bad);
+  background: var(--bad-bg);
+  color: var(--bad);
+  font-weight: 600;
+}
+
+.overview__jump--info { border-color: var(--accent); background: var(--caution-bg); }
+.overview__jump--neutral { color: var(--ink-soft); }
 
 /* --------------------------------------------------------------- cards */
 
@@ -171,6 +268,39 @@ button.primary {
   line-height: 1.35;
   text-wrap: balance;
 }
+
+/* A collapsible card must not look like a widget: the summary is the card
+   title, with a marker small enough to read as punctuation. The default
+   disclosure triangle sits outside the title and is styled by the platform, so
+   it is removed in both spellings and drawn here instead — in `currentColor`,
+   which is how it stays right in both colour schemes and on an alert. */
+details.card > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+details.card > summary::-webkit-details-marker { display: none; }
+
+details.card > summary::before {
+  content: "▸";
+  display: inline-block;
+  flex: none;
+  color: currentColor;
+  opacity: 0.55;
+  font-size: 0.9rem;
+  transition: transform 0.15s ease;
+}
+
+details.card[open] > summary::before { transform: rotate(90deg); }
+
+details.card > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* Every card is focusable so a jump can land the reader inside it; the ring is
+   how they see where they landed. */
+.card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 .card__lede {
   margin: 0.5rem 0 0;
@@ -313,4 +443,33 @@ code {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- touch */
+
+/* A finger, not a mouse. Two of these are corrections rather than taste:
+   iOS Safari zooms into any field whose text is under 16 px and does not zoom
+   back out afterwards, leaving the page wider than the screen for the rest of
+   the visit; and 44 px is the smallest control Apple's own guidance says a
+   thumb hits reliably. The mono type grows with the same reasoning the
+   textarea does — 0.7rem is 11 px, which is not a size you read a hostname at
+   when the hostname is the finding. */
+@media (pointer: coarse) {
+  textarea { font-size: 1rem; }
+
+  button {
+    min-height: 44px;
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+  }
+
+  .chip { font-size: 0.78rem; }
+  .item__value--mono { font-size: 0.85rem; }
+}
+
+/* A phone held upright. The card padding was 1.35rem a side, which on a 320 px
+   screen spends a sixth of the width on margins. */
+@media (max-width: 26rem) {
+  body { padding: 2rem 1rem 4rem; }
+  .card { padding: 0.9rem 0.85rem; }
 }

@@ -16,16 +16,51 @@ function stubNode(tag = 'div') {
     className: '',
     textContent: '',
     hidden: false,
+    // `<details>` state, and the two things a jump does to a card. Recorded
+    // rather than ignored: "the report is brought into view" is a promise now,
+    // and a spy that swallows the call cannot tell whether it was kept.
+    open: false,
+    scrolledIntoView: [],
+    clicks: 0,
     children: [],
-    classList: { add(...c) { node.className += ` ${c.join(' ')}`; } },
+    classList: {
+      add(...c) { node.className += ` ${c.join(' ')}`; },
+      remove(...c) {
+        node.className = node.className.split(/\s+/)
+          .filter((name) => name && !c.includes(name))
+          .join(' ');
+      },
+      contains(name) { return node.className.split(/\s+/).includes(name); },
+    },
     append(...kids) { node.children.push(...kids); },
     replaceChildren(...kids) { node.children = kids; },
     addEventListener(type, handler) { (node.handlers[type] ??= []).push(handler); },
-    focus() {},
+    focus() { globalThis.document.activeElement = node; },
+    click() { node.clicks += 1; },
+    scrollIntoView(options) { node.scrolledIntoView.push(options); },
     handlers: {},
   };
   return node;
 }
+
+/** Fire every handler registered for `type`, with an event the page can use. */
+function fire(node, type, event = {}) {
+  const fake = { defaultPrevented: false, preventDefault() { fake.defaultPrevented = true; }, ...event };
+  for (const handler of node.handlers[type] ?? []) handler(fake);
+  return fake;
+}
+
+/** Let a `setTimeout(…, 0)` and any pending microtask run. */
+const settle = () => new Promise((resolve) => { setTimeout(resolve, 0); });
+
+/** A File as this page uses it: a size to check and a text() to await. */
+function stubFile(text, size = text.length) {
+  return { size, async text() { return text; } };
+}
+
+/** The findings' cards, without the overview that leads them. */
+const cardsOf = (results) => results.children.slice(1);
+const toneOf = (card) => card.className.split(/\s+/).find((c) => c.startsWith('card--'))?.slice(6);
 
 /** Flatten the rendered tree into text, the way a reader would see it. */
 function renderedText(node) {
@@ -38,22 +73,33 @@ function byClass(node, name) {
   return [...here, ...node.children.flatMap((child) => byClass(child, name))];
 }
 
-async function loadApp() {
+async function loadApp({ wide = true } = {}) {
   const nodes = {
     '#header-input': stubNode('textarea'),
+    '#input-area': stubNode('section'),
+    '#file-input': stubNode('input'),
     '#results': stubNode(),
     '#empty-state': stubNode(),
     '#status': stubNode(),
     '#analyse': stubNode('button'),
     '#clear': stubNode('button'),
+    '#open-file': stubNode('button'),
   };
   nodes['#header-input'].value = '';
+  nodes['#file-input'].value = '';
+  nodes['#file-input'].files = [];
 
   globalThis.document = {
     querySelector: (selector) => nodes[selector] ?? null,
     createElement: (tag) => stubNode(tag),
+    activeElement: null,
   };
-  globalThis.window = { addEventListener() {} };
+  // `wide` is the whole difference between a desktop report and a phone one:
+  // every non-alert card reads it once, at render time.
+  globalThis.window = {
+    addEventListener() {},
+    matchMedia: (media) => ({ media, matches: wide }),
+  };
   // The blocklist is fetched lazily; the stub keeps the smoke test offline.
   globalThis.fetch = async () => { throw new Error('offline in tests'); };
 
@@ -221,4 +267,190 @@ test('no live URL reaches the page either', async () => {
   walk(nodes['#results']);
 
   assert.deepEqual(anchors, [], 'the page built an anchor out of header text');
+});
+
+// ---------------------------------------------------------------- reading it
+//
+// Everything below is about the page as a phone reader meets it: a paste that
+// reads itself, a report that says what is in it before the scrolling starts,
+// and a file that never goes anywhere near a network.
+
+test('a paste reads the message without a second click', async () => {
+  const nodes = await loadApp();
+
+  // The value lands after the paste event, which is why the page defers: read
+  // synchronously, this would have analysed the empty field.
+  fire(nodes['#header-input'], 'paste');
+  nodes['#header-input'].value = BULK_HEADER;
+  await settle();
+
+  assert.ok(nodes['#results'].children.length > 0, 'the paste alone produced a report');
+  assert.match(nodes['#status'].textContent, /Nothing left this page/);
+});
+
+test('a paste of nothing produces nothing rather than an error', async () => {
+  const nodes = await loadApp();
+  fire(nodes['#header-input'], 'paste');
+  await settle();
+  assert.equal(nodes['#results'].children.length, 0);
+});
+
+test("the overview names every card once, in the card's own tone", async () => {
+  const nodes = await loadApp();
+  nodes['#header-input'].value = BULK_HEADER;
+  for (const handler of nodes['#analyse'].handlers.click) handler();
+
+  const [overview] = nodes['#results'].children;
+  assert.ok(overview.classList.contains('overview'), 'the overview leads the results');
+  assert.equal(overview.tag, 'nav');
+  assert.equal(overview.ariaLabel, 'Report overview');
+
+  const cards = cardsOf(nodes['#results']);
+  const jumps = byClass(overview, 'overview__jump');
+  assert.ok(cards.length > 1, 'sanity: this header produces several cards');
+  assert.equal(jumps.length, cards.length, 'one jump per card, no more and no fewer');
+
+  cards.forEach((card, i) => {
+    const title = byClass(card, 'card__title')[0].textContent;
+    assert.equal(jumps[i].textContent, title, 'a jump is labelled with the card it points at');
+    assert.ok(
+      jumps[i].classList.contains(`overview__jump--${toneOf(card)}`),
+      `jump ${i} carries the tone of its card`,
+    );
+  });
+
+  const tally = byClass(overview, 'overview__tally')[0].textContent;
+  const counted = [...tally.matchAll(/(\d+)\s/g)].reduce((sum, [, n]) => sum + Number(n), 0);
+  assert.equal(counted, cards.length, `the tally counts every card: ${tally}`);
+});
+
+test('a jump opens a collapsed card, scrolls to it and puts focus in it', async () => {
+  const nodes = await loadApp({ wide: false });
+  nodes['#header-input'].value = BULK_HEADER;
+  for (const handler of nodes['#analyse'].handlers.click) handler();
+
+  const [overview] = nodes['#results'].children;
+  const cards = cardsOf(nodes['#results']);
+  const jumps = byClass(overview, 'overview__jump');
+
+  const index = cards.findIndex((card) => card.tag === 'details');
+  assert.ok(index >= 0, 'sanity: a narrow screen collapses at least one card');
+  const card = cards[index];
+  assert.equal(card.open, false, 'precondition: it starts closed');
+
+  fire(jumps[index], 'click');
+
+  assert.equal(card.open, true, 'the jump opened it — a closed card cannot be read');
+  assert.deepEqual(card.scrolledIntoView, [{ block: 'start' }]);
+  assert.equal(globalThis.document.activeElement, card, 'and focus followed the scroll');
+  assert.equal(card.tabIndex, -1, 'reachable by focus, not by tabbing');
+});
+
+test('a finished report is brought into view rather than left below the fold', async () => {
+  const nodes = await loadApp({ wide: false });
+  nodes['#header-input'].value = BULK_HEADER;
+  for (const handler of nodes['#analyse'].handlers.click) handler();
+
+  const [overview] = nodes['#results'].children;
+  assert.deepEqual(overview.scrolledIntoView, [{ block: 'start' }], 'the report scrolled itself into view');
+  assert.equal(globalThis.document.activeElement, overview, 'and focus is on it, not on the body');
+  assert.equal(overview.tabIndex, -1);
+});
+
+test('notes fold on a narrow screen and stand open on a wide one', async () => {
+  for (const wide of [true, false]) {
+    const nodes = await loadApp({ wide });
+    nodes['#header-input'].value = BULK_HEADER;
+    for (const handler of nodes['#analyse'].handlers.click) handler();
+
+    const foldable = cardsOf(nodes['#results']).filter((card) => card.tag === 'details');
+    assert.ok(foldable.length > 0, 'sanity: some cards are foldable');
+    for (const card of foldable) {
+      assert.equal(card.open, wide, `a foldable card is ${wide ? 'open' : 'closed'} at this width`);
+    }
+  }
+});
+
+test('an alert card is never one of the foldable ones', async () => {
+  // The card a hurried reader came for is the one that must not need a tap.
+  const nodes = await loadApp({ wide: false });
+  nodes['#header-input'].value = BULK_HEADER;
+  for (const handler of nodes['#analyse'].handlers.click) handler();
+
+  const alerts = cardsOf(nodes['#results']).filter((card) => toneOf(card) === 'alert');
+  assert.ok(alerts.length > 0, 'sanity: this header raises at least one alert');
+  for (const card of alerts) {
+    assert.equal(card.tag, 'section', 'an alert stays a plain section');
+    assert.equal(byClass(card, 'card__summary').length, 0, 'and has nothing to expand');
+  }
+});
+
+test('the Open a file button reaches the hidden input rather than a dialog of its own', async () => {
+  const nodes = await loadApp();
+  fire(nodes['#open-file'], 'click');
+  assert.equal(nodes['#file-input'].clicks, 1);
+});
+
+test('a chosen file is read and analysed, and its name does not linger', async () => {
+  const nodes = await loadApp();
+  nodes['#file-input'].files = [stubFile(BULK_HEADER)];
+
+  fire(nodes['#file-input'], 'change', { target: nodes['#file-input'] });
+  await settle();
+
+  assert.equal(nodes['#header-input'].value, BULK_HEADER, 'the file landed in the same field a paste uses');
+  assert.ok(nodes['#results'].children.length > 0, 'and was read');
+  assert.equal(nodes['#file-input'].value, '', 'the input is reset, so the same file can be picked again');
+});
+
+test('a file too large to be a message is refused rather than read', async () => {
+  const nodes = await loadApp();
+  let touched = false;
+  nodes['#file-input'].files = [{
+    size: 33 * 1024 * 1024,
+    async text() { touched = true; return BULK_HEADER; },
+  }];
+
+  fire(nodes['#file-input'], 'change', { target: nodes['#file-input'] });
+  await settle();
+
+  assert.equal(touched, false, 'the bytes were never read at all');
+  assert.equal(nodes['#header-input'].value, '', 'nothing was loaded');
+  assert.equal(nodes['#results'].children.length, 0);
+  assert.match(nodes['#status'].textContent, /32 MB/, 'and the reader is told why');
+});
+
+test('a dropped file takes the same path as a chosen one', async () => {
+  const nodes = await loadApp();
+
+  const over = fire(nodes['#input-area'], 'dragover');
+  assert.equal(over.defaultPrevented, true, 'or the browser navigates to the file instead');
+  assert.ok(nodes['#input-area'].classList.contains('input-area--drop'));
+
+  fire(nodes['#input-area'], 'dragleave');
+  assert.equal(nodes['#input-area'].classList.contains('input-area--drop'), false);
+
+  const drop = fire(nodes['#input-area'], 'drop', { dataTransfer: { files: [stubFile(BULK_HEADER)] } });
+  await settle();
+
+  assert.equal(drop.defaultPrevented, true);
+  assert.equal(nodes['#header-input'].value, BULK_HEADER);
+  assert.ok(nodes['#results'].children.length > 0, 'the drop produced a report');
+  assert.equal(nodes['#input-area'].classList.contains('input-area--drop'), false);
+});
+
+test('the textarea shrinks once it has been read, and opens again to edit', async () => {
+  const nodes = await loadApp();
+  const area = nodes['#input-area'];
+  nodes['#header-input'].value = BULK_HEADER;
+  for (const handler of nodes['#analyse'].handlers.click) handler();
+  assert.ok(area.classList.contains('input-area--read'), 'a read report collapses the paste');
+
+  fire(nodes['#header-input'], 'focus');
+  assert.equal(area.classList.contains('input-area--read'), false, 'clicking in re-opens it');
+
+  for (const handler of nodes['#analyse'].handlers.click) handler();
+  assert.ok(area.classList.contains('input-area--read'));
+  for (const handler of nodes['#clear'].handlers.click) handler();
+  assert.equal(area.classList.contains('input-area--read'), false, 'and clear leaves nothing collapsed');
 });
