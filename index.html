@@ -36,10 +36,13 @@
       <button id="analyse" type="button" class="primary">Read it</button>
       <button id="clear" type="button">Clear</button>
       <button id="open-file" type="button">Open a file…</button>
-      <!-- The file never leaves the tab: it is read with `file.text()` into the
-           same variable a paste lands in. Hidden because a bare file control
-           says "Choose File" and shows the name of the message afterwards,
-           which is one more place the reader's mail is written down. -->
+      <!-- The file never leaves the tab: its bytes are read with
+           `file.arrayBuffer()` and decoded here, into the same variable a paste
+           lands in. Not `file.text()`, which decodes as UTF-8 and writes U+FFFD
+           over a legacy 8-bit message before the parser sees a byte. Hidden
+           because a bare file control says "Choose File" and shows the name of
+           the message afterwards, which is one more place the reader's mail is
+           written down. -->
       <label class="visually-hidden" for="file-input">Message file</label>
       <input type="file" id="file-input" accept=".eml,.txt,message/rfc822" class="visually-hidden">
       <span id="status" class="status" role="status" aria-live="polite"></span>
