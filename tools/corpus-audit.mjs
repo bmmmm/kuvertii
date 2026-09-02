@@ -29,35 +29,11 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { analyseBody } from '../js/body.js';
-import { hashedAddressRows } from '../js/emailhash.js';
 import { analyse } from '../js/findings.js';
 import { parseParts, splitMessage } from '../js/mime.js';
-import { verdictRows } from '../js/snapshot.js';
 import { createRenderer } from '../js/terminal.js';
 import { MAX_HEADER_BYTES, readHeaders } from '../js/unfold.js';
-
-// The phase-5 invariant set, checked against the VISIBLE text of each rendered
-// card (this tool's own colour codes stripped first).
-const CONTROL_BYTE = /(?![\t\n])[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}]/u;
-const LIVE_URL = /(?:https?|ftps?):\/\/[^\s<>"'`)\]]/i; // scheme + a host char = linkifiable
-const PLACEHOLDER = /\[object Object\]|native code|\bundefined\b|\bNaN\b|the first ∞|∞ bytes/;
-const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
-
-/** Resolve the two async bridges the front ends resolve, so their rows are checked too. */
-async function withBridges(findings) {
-  for (const f of findings) {
-    if (f.hashCheck) {
-      try { f.items = [...f.items, ...await hashedAddressRows(f.hashCheck)]; } catch { /* checked as a fault below */ }
-    }
-    if (f.hostsToCheck?.length) {
-      // The shape checkHosts returns with no snapshot on disk — the path that
-      // renders the (hostile) hostnames into row labels.
-      const rows = f.hostsToCheck.map((host) => ({ host, unavailable: true, why: 'audit: no snapshot' }));
-      try { f.items = [...f.items, ...verdictRows(rows)]; } catch { /* ditto */ }
-    }
-  }
-  return findings;
-}
+import { checkFindings, checkScreen, stripAnsi, withBridges } from './report-invariants.mjs';
 
 async function auditOne(raw) {
   const report = {
@@ -92,37 +68,12 @@ async function auditOne(raw) {
   } catch (e) { report.breaks.push(`analyse threw (${e.name})`); return report; }
   report.findingIds = findings.map((f) => f.id);
 
-  // Every finding is reached elsewhere by `find(f => f.id === ...)`. One with no
-  // id is addressable only by its position in the array — so two of them, both
-  // alerts at the front of the report, answer for each other. A real message
-  // surfaced exactly this. Position and tone are fixed labels, never content.
-  findings.forEach((f, idx) => {
-    if (!f.id) report.breaks.push(`ANON: finding #${idx} carries no id (tone=${f.tone})`);
-  });
-
-  // A guardSection caught a throw: the pipeline faulted on this message.
-  for (const f of findings) {
-    for (const it of f.items ?? []) {
-      if (it.level === 'fault') report.breaks.push(`FAULT in finding ${f.id}`);
-    }
-  }
+  report.breaks.push(...checkFindings(findings));
 
   for (const colour of [false, true]) {
     let out;
     try { out = createRenderer({ colour, width: 80 }).render(findings); } catch (e) { report.breaks.push(`renderer threw colour=${colour} (${e.name})`); continue; }
-    const vis = stripAnsi(out);
-    const cb = vis.match(CONTROL_BYTE);
-    if (cb) report.breaks.push(`CONTROL_BYTE on screen colour=${colour}: U+${cb[0].codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}`);
-    // U+FFFD is the one character on a report that can only have come from
-    // this tool — TextDecoder emits it where the bytes were not UTF-8, which is
-    // a decoder reporting that it failed. A message may well carry one of its
-    // own (a mis-encoded display name arrives as one), so what is checked is
-    // that the tool did not invent it. A real message spent a whole render
-    // showing them as campaign metadata, and every invariant here passed:
-    // neutralise had made the control bytes among them printable first.
-    if (!raw.includes('\uFFFD') && vis.includes('\uFFFD')) report.breaks.push(`MOJIBAKE on screen colour=${colour}: a decode the tool could not read was printed`);
-    if (LIVE_URL.test(vis)) report.breaks.push(`LIVE_URL on screen colour=${colour}`);
-    if (PLACEHOLDER.test(vis)) report.breaks.push(`PLACEHOLDER on screen colour=${colour}`);
+    report.breaks.push(...checkScreen(stripAnsi(out), { raw, where: `colour=${colour}` }));
   }
   return report;
 }

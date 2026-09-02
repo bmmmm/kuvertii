@@ -20,6 +20,7 @@ import { parseParts, splitMessage } from '../js/mime.js';
 import { createRenderer } from '../js/terminal.js';
 import { parseHeaders } from '../js/unfold.js';
 import { authCombinations, compauthCombinations, DECISIVE } from './verdicts.js';
+import { checkFindings, checkScreen } from '../tools/report-invariants.mjs';
 
 test('a card carrying a failure is never toned as though it were not', () => {
   // `bad` is the level reserved for "this is wrong and you should act on it".
@@ -357,4 +358,54 @@ test('a UTF-8 message file decodes exactly, and a windows-1252 one keeps its eur
   // 'windows-1252' with ISO-8859-1 — which is why the table is now ours.
   const cp1252 = Uint8Array.from([0x35, 0x20, 0x80, 0x0a]);
   assert.equal(textFromMessageBytes(cp1252), '5 €\n');
+});
+
+// The invariants above are asked of the pipeline. These ask the invariant
+// checker itself whether it can still say no — a probe that cannot fail passes
+// every corpus it is ever pointed at, and reports a clean bill for the reason
+// that it is blind.
+
+test('the invariant checker still has teeth', () => {
+  const clean = [
+    { id: 'auth', tone: 'info', title: ALL_CLEAR_TITLE, items: [] },
+    { id: 'recipients', tone: 'alert', title: 'Who this was actually addressed to', items: [] },
+  ];
+  assert.deepEqual(checkFindings(clean), [], 'a consistent report breaks nothing');
+  assert.deepEqual(checkScreen('Received from mail.example — nothing left this page'), []);
+
+  // One real control byte through the screen check: U+202E reverses everything
+  // after it in a terminal, and is exactly what neutralise exists to remove.
+  assert.match(
+    checkScreen('Subject: he\u202Ello').join(' '),
+    /CONTROL_BYTE/,
+    'a steering byte on screen is still caught',
+  );
+});
+
+test('two cards may not wear the same id', () => {
+  // `find(f => f.id === …)` stops at the first match, so a second card with an
+  // id that already exists is unreachable: every caller, every test and every
+  // jump target in the overview resolves to its twin instead. Only the missing
+  // half of this was checked — a card with no id at all.
+  const twins = [
+    { id: 'auth', tone: 'info', title: 'first', items: [] },
+    { id: 'auth', tone: 'alert', title: 'second', items: [] },
+  ];
+  assert.match(checkFindings(twins).join(' '), /DUPLICATE ID: two findings share the id auth/);
+  assert.deepEqual(checkFindings([{ tone: 'info', title: 'x', items: [] }]).length, 1, 'and an id-less card still breaks');
+});
+
+test('an alert card may not headline a clean pass', () => {
+  // The report contradicting itself in the two places a glance lands. There are
+  // tests for the combinations that produce it today; this says it once, for
+  // any card, so a headline that reaches a new card is caught here rather than
+  // by whoever happens to write that card's test.
+  for (const title of [ALL_CLEAR_TITLE, PASSED_BUT_JUNK_TITLE]) {
+    const contradiction = [{ id: 'auth', tone: 'alert', title, items: [] }];
+    assert.match(
+      checkFindings(contradiction).join(' '),
+      /ALL-CLEAR ON AN ALERT: finding auth/,
+      `"${title}" over an alert`,
+    );
+  }
 });

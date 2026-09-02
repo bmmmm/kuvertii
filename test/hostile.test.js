@@ -296,8 +296,16 @@ test('an oversized paste is clipped, and the CLI says so', () => {
     `From: a@b.example\n${Array.from({ length: 10 }, (_, i) => `X-Blob${i}: ${'x'.repeat(102400)}`).join('\n')}\n`,
   )));
   // Measured at 217 seconds before the bounds; the ceiling is a second guard,
-  // not the fix.
-  assert.ok(ms < 2000, `took ${ms}ms`);
+  // not the fix — a tripwire for a return to unbounded quantifiers, never a
+  // latency budget, which is the rule test/markup.test.js states and follows at
+  // ~20x its own measurement. This one sat at ~2x: five runs on an idle machine
+  // gave 416, 810, 1061, 1178 and 1772 ms against a 2000 ms ceiling, each 1 MB
+  // allocation leaving the next more to collect. So it went red on an idle
+  // machine, and `node tools/mutate.mjs` — which refuses to run at all unless
+  // the suite is green first — was blocked by it three times in one session.
+  // 10 seconds is 20x the fastest run and still catches the 217 s regression
+  // twenty times over.
+  assert.ok(ms < 10000, `took ${ms}ms`);
   assert.equal(MAX_HEADER_BYTES, 1024 * 1024);
 });
 

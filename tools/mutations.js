@@ -1710,4 +1710,39 @@ function decodeMailCharsetDisabledByMutation(bytes, label) {
     // legible all along, and put the result on an alert card as an address
     // "recoverable only by decoding".
   },
+
+  {
+    id: 'duplicate-finding-id-unchecked',
+    promise: 'No two cards of one report wear the same id.',
+    file: 'tools/report-invariants.mjs',
+    find: `    if (seen.has(f.id)) breaks.push(\`DUPLICATE ID: two findings share the id \${f.id}\`);`,
+    replace: '',
+    mustKill: ['two cards may not wear the same id'],
+    // `find(f => f.id === …)` stops at the first match, so the second card is
+    // unreachable — every caller and every jump target lands on its twin. Only
+    // the missing half was checked before: a card with no id at all.
+  },
+
+  {
+    id: 'all-clear-headline-on-an-alert-unchecked',
+    promise: 'No alert card headlines a clean pass.',
+    file: 'tools/report-invariants.mjs',
+    find: `    if (f.tone !== 'alert') continue;`,
+    replace: `    if (f.tone !== 'alert') continue; if (f.id) continue;`,
+    mustKill: ['an alert card may not headline a clean pass'],
+    // Said generically rather than per combination, so a headline reaching a
+    // new card is caught by the invariant instead of by whoever writes that
+    // card's own test.
+  },
+
+  {
+    id: 'screen-check-cannot-see-control-bytes',
+    promise: 'The invariant checker itself can still fail.',
+    file: 'tools/report-invariants.mjs',
+    find: `  const cb = visible.match(CONTROL_BYTE);`,
+    replace: `  const cb = null;`,
+    mustKill: ['the invariant checker still has teeth'],
+    // A probe that cannot say no passes every corpus it is pointed at, and the
+    // clean bill it hands back means only that it is blind.
+  },
 ];
