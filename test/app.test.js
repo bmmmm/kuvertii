@@ -429,23 +429,63 @@ test('a file too large to be a message is refused rather than read', async () =>
   assert.match(nodes['#status'].textContent, /32 MB/, 'and the reader is told why');
 });
 
-test('a dropped file takes the same path as a chosen one', async () => {
+/** A drag as the browser describes one: the cargo is in `types`, not in `files`. */
+const fileDrag = (...files) => ({ dataTransfer: { types: ['Files'], files } });
+
+test('a file dropped anywhere on the page is read, not opened by the browser', async () => {
+  // The guards are on `window` because `#results` is a sibling of the input
+  // area, not a child: after a report is rendered it is most of the screen, and
+  // a drop that misses the textarea used to reach no preventDefault at all —
+  // the browser then left the page and rendered the message in the tab.
   const nodes = await loadApp();
 
-  const over = fire(nodes['#input-area'], 'dragover');
+  const over = fire(nodes.window, 'dragover', fileDrag());
   assert.equal(over.defaultPrevented, true, 'or the browser navigates to the file instead');
-  assert.ok(nodes['#input-area'].classList.contains('input-area--drop'));
 
-  fire(nodes['#input-area'], 'dragleave');
-  assert.equal(nodes['#input-area'].classList.contains('input-area--drop'), false);
-
-  const drop = fire(nodes['#input-area'], 'drop', { dataTransfer: { files: [stubFile(BULK_HEADER)] } });
+  const drop = fire(nodes.window, 'drop', fileDrag(stubFile(BULK_HEADER)));
   await settle();
 
   assert.equal(drop.defaultPrevented, true);
-  assert.equal(nodes['#header-input'].value, BULK_HEADER);
+  assert.equal(nodes['#header-input'].value, BULK_HEADER, 'the drop took the file picker\'s path');
   assert.ok(nodes['#results'].children.length > 0, 'the drop produced a report');
   assert.equal(nodes['#input-area'].classList.contains('input-area--drop'), false);
+});
+
+test('a drag across the page keeps saying where the file will land', async () => {
+  const nodes = await loadApp();
+  const area = nodes['#input-area'];
+
+  fire(nodes.window, 'dragenter', fileDrag());
+  assert.ok(area.classList.contains('input-area--drop'), 'the target is named as soon as a file is over the page');
+
+  // Crossing from one element to the next: the child is entered before the
+  // parent is left, so the frame must survive the pair.
+  fire(nodes.window, 'dragenter', fileDrag());
+  fire(nodes.window, 'dragleave', fileDrag());
+  assert.ok(area.classList.contains('input-area--drop'), 'an element boundary is not the drag leaving');
+
+  fire(nodes.window, 'dragleave', fileDrag());
+  assert.equal(area.classList.contains('input-area--drop'), false, 'leaving the window takes the frame with it');
+});
+
+test('a drag carrying no file is left to the browser', async () => {
+  // Dragging selected text inside the textarea is the browser's own edit
+  // gesture. A window-wide unconditional preventDefault swallows it — the
+  // gate is the cargo, not the target.
+  const nodes = await loadApp();
+  const textDrag = { dataTransfer: { types: ['text/plain'], files: [] } };
+
+  const over = fire(nodes.window, 'dragover', textDrag);
+  const drop = fire(nodes.window, 'drop', textDrag);
+  await settle();
+
+  assert.equal(over.defaultPrevented, false, 'the browser still moves the text');
+  assert.equal(drop.defaultPrevented, false);
+  assert.equal(
+    nodes['#input-area'].classList.contains('input-area--drop'),
+    false,
+    'and nothing pretends a file is coming',
+  );
 });
 
 test('the textarea shrinks once it has been read, and opens again to edit', async () => {

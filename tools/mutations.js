@@ -1605,4 +1605,52 @@ function decodeMailCharsetDisabledByMutation(bytes, label) {
     // Windows client's curly quotes would then read as control bytes, and the
     // controls card would accuse the sender of steering the reader's terminal.
   },
+
+  {
+    id: 'drop-guard-not-window-scoped',
+    promise: 'A message file dropped anywhere on this page is read here, never opened by the browser.',
+    file: 'js/app.js',
+    find: `window.addEventListener('drop', (event) => {`,
+    replace: `inputArea.addEventListener('drop', (event) => {`,
+    mustKill: ['a file dropped anywhere on the page is read, not opened by the browser'],
+    // What the page did until this was moved: `#results` is a sibling of the
+    // input area, so once a report was on screen a drop onto it met no guard
+    // and the browser navigated to the file — leaving the page and rendering
+    // the message in the tab.
+  },
+
+  {
+    id: 'dragover-guard-not-window-scoped',
+    promise: 'A message file dropped anywhere on this page is read here, never opened by the browser.',
+    file: 'js/app.js',
+    find: `window.addEventListener('dragover', (event) => {`,
+    replace: `inputArea.addEventListener('dragover', (event) => {`,
+    mustKill: ['a file dropped anywhere on the page is read, not opened by the browser'],
+    // Both halves have to be window-wide: a drop guard without a dragover guard
+    // never fires, because the drop target was never marked as one.
+  },
+
+  {
+    id: 'drop-guard-swallows-text-drags',
+    promise: 'Dragging selected text inside the field stays the browser\'s gesture; only files are intercepted.',
+    file: 'js/app.js',
+    find: `const carriesFiles = (event) => Boolean(event.dataTransfer?.types?.includes('Files'));`,
+    replace: `const carriesFiles = () => true;`,
+    mustKill: ['a drag carrying no file is left to the browser'],
+    // The cost of moving the guards to `window`: an ungated preventDefault
+    // there also eats moving a selection inside the textarea, which carries no
+    // file and is none of this page's business.
+  },
+
+  {
+    id: 'drag-frame-clears-at-every-boundary',
+    promise: 'While a file is over the page, the frame keeps saying where it will land.',
+    file: 'js/app.js',
+    find: `  if (dragsInside > 0) return;\n`,
+    replace: '',
+    mustKill: ['a drag across the page keeps saying where the file will land'],
+    // dragenter and dragleave nest rather than alternate, and both bubble to
+    // window. Uncounted, the frame is cleared at every element boundary the
+    // pointer crosses.
+  },
 ];

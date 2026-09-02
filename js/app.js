@@ -365,19 +365,59 @@ fileInput.addEventListener('change', (event) => {
   readMessageFile(file);
 });
 
-// Dropping a saved .eml onto the page is the shortest route from a phone or a
-// mail client to a reading, and it touches the bytes exactly the way the file
-// picker does.
-inputArea.addEventListener('dragover', (event) => {
-  // Without preventDefault the browser navigates to the file instead, which
-  // leaves the page and renders the message in the tab — the one thing this
-  // tool exists not to do.
+/**
+ * Dropping a saved .eml onto the page is the shortest route from a phone or a
+ * mail client to a reading, and it touches the bytes exactly the way the file
+ * picker does.
+ *
+ * The guards sit on `window`, not on the input area. They used to hang off
+ * `#input-area` alone, and `#results` is its sibling: once a report had been
+ * rendered it filled the screen, so a file dropped onto the very thing the
+ * reader was looking at reached no `preventDefault()` and the browser navigated
+ * to it — rendering the message in the tab, which is the one thing this tool
+ * exists not to do. A missed rectangle must not mean leaving the page: whoever
+ * drags a message here wants it read, so it is read wherever it lands.
+ *
+ * What is guarded is the cargo, not the target. Only a drag carrying files is
+ * taken (`dataTransfer.types` contains 'Files' — HTML §6.11.5, and the file
+ * list itself stays empty until the drop). A window-wide unconditional
+ * `preventDefault()` would otherwise swallow dragging selected text inside the
+ * textarea: the browser's own edit gesture, which carries no file and is none
+ * of this page's business.
+ */
+const carriesFiles = (event) => Boolean(event.dataTransfer?.types?.includes('Files'));
+
+// A drag enters a child before it leaves the parent, so the two events nest
+// rather than alternate. Counting them is what separates "the pointer crossed
+// from the textarea onto the report", which must keep the frame, from "the drag
+// left the window", which must drop it — an uncounted window-wide `dragleave`
+// clears the frame at every element boundary the pointer crosses.
+let dragsInside = 0;
+
+window.addEventListener('dragenter', (event) => {
+  if (!carriesFiles(event)) return;
+  dragsInside += 1;
+  // The frame stays on the input area wherever the pointer is. One fixed place
+  // saying where the file will land reads better than a highlight chasing the
+  // cursor, and the answer is the same everywhere: it will be read.
+  inputArea.classList.add('input-area--drop');
+});
+window.addEventListener('dragover', (event) => {
+  if (!carriesFiles(event)) return;
   event.preventDefault();
   inputArea.classList.add('input-area--drop');
 });
-inputArea.addEventListener('dragleave', () => inputArea.classList.remove('input-area--drop'));
-inputArea.addEventListener('drop', (event) => {
+window.addEventListener('dragleave', (event) => {
+  if (!carriesFiles(event)) return;
+  dragsInside -= 1;
+  if (dragsInside > 0) return;
+  dragsInside = 0;
+  inputArea.classList.remove('input-area--drop');
+});
+window.addEventListener('drop', (event) => {
+  if (!carriesFiles(event)) return;
   event.preventDefault();
+  dragsInside = 0;
   inputArea.classList.remove('input-area--drop');
   readMessageFile(event.dataTransfer?.files?.[0]);
 });
