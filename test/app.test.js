@@ -101,12 +101,14 @@ async function loadApp({ wide = true } = {}) {
     createElement: (tag) => stubNode(tag),
     activeElement: null,
   };
-  // `wide` is the whole difference between a desktop report and a phone one:
-  // every non-alert card reads it once, at render time.
-  globalThis.window = {
-    addEventListener() {},
-    matchMedia: (media) => ({ media, matches: wide }),
-  };
+  // A real node, not `{ addEventListener() {} }`: the page registers handlers on
+  // `window` too — the drop guards and `pageshow` — and a stub that throws them
+  // away cannot be fired, so those paths had no test at all rather than a
+  // failing one. `wide` is the whole difference between a desktop report and a
+  // phone one: every non-alert card reads it once, at render time.
+  nodes.window = stubNode('window');
+  nodes.window.matchMedia = (media) => ({ media, matches: wide });
+  globalThis.window = nodes.window;
   // The blocklist is fetched lazily; the stub keeps the smoke test offline.
   globalThis.fetch = async () => { throw new Error('offline in tests'); };
 
