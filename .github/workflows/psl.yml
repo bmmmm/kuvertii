@@ -9,8 +9,7 @@ on:
     - cron: '13 5 1 * *'
   workflow_dispatch:
 
-# Read-only by default; only the job that pushes a branch and opens the pull
-# request gets to write. main itself is never written by this workflow.
+# Read-only by default; the one job that commits gets `contents: write`.
 permissions:
   contents: read
 
@@ -19,7 +18,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -30,36 +28,29 @@ jobs:
       # A refreshed list that breaks a test must never land unattended.
       - run: node --test
 
-      # A pull request, never a push to main. This repository's main is a
-      # mirror of its Forgejo origin, so a commit that exists only on GitHub
-      # would put the two out of step — the same reason Dependabot's bumps are
-      # adopted locally here rather than merged on GitHub. The refresh is
-      # reviewed and pulled like any other change, and reaches the live site
-      # with the pages run that follows the merge.
+      # Straight onto main. There is nothing to review: the file is generated
+      # from publicsuffix.org by a script whose output nobody reads line by
+      # line, and the step above is the actual gate — a refreshed list that
+      # breaks a test never gets here.
       #
-      # `gh pr create` with the workflow token needs the repository setting
-      # "Allow GitHub Actions to create and approve pull requests" (Settings →
-      # Actions → General), off by default and off at the time of writing:
-      #   gh api -X PUT repos/bmmmm/kuvertii/actions/permissions/workflow \
-      #     -f default_workflow_permissions=read \
-      #     -F can_approve_pull_request_reviews=true
-      # Until it is on, the branch is pushed and this step fails on the PR,
-      # which is the loud failure wanted — never a quiet push to main.
-      - name: Open a pull request if the list changed
-        env:
-          GH_TOKEN: ${{ github.token }}
+      # The one consequence, worth knowing rather than avoiding: this commit is
+      # born on GitHub, and main here is the mirror of the Forgejo origin. So
+      # for one month of the year the mirror is ahead of the source, and the
+      # next local session pulls it back the other way before pushing:
+      #
+      #   git pull --rebase github main   # then push origin, then github
+      #
+      # A push made with the default GITHUB_TOKEN triggers no other workflow,
+      # so pages.yml does not run for it — the refreshed list reaches the live
+      # site with the next daily 04:17 UTC build rather than immediately.
+      - name: Commit and push if the list changed
         run: |
           if git diff --quiet -- js/psl.js; then
             echo "js/psl.js unchanged"
             exit 0
           fi
-          branch="psl/refresh-$(date -u +%Y-%m-%d)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -c "$branch"
           git add js/psl.js
           git commit -m "chore: refresh the public suffix list"
-          git push -u origin "$branch"
-          gh pr create --base main --head "$branch" \
-            --title "chore: refresh the public suffix list" \
-            --body "tools/build-psl.mjs, run by .github/workflows/psl.yml. The suite passed on the refreshed list before this was opened."
+          git push

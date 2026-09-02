@@ -322,10 +322,11 @@ loopback-only and serves an allowlist.
 so the build can be reproduced and inspected without network access.
 
 `js/psl.js` no longer needs a manual reminder: `.github/workflows/psl.yml` runs
-`tools/build-psl.mjs` monthly, runs the suite on the result, and opens a pull
-request when the list changed — never a commit to `main`, which is a mirror of
-the Forgejo origin here. The script still works exactly the same when run
-locally.
+`tools/build-psl.mjs` monthly, runs the suite on the result, and commits it when
+the list changed. That commit is born on GitHub while `main` here is the mirror
+of a Forgejo origin, so the next local session pulls it back the other way
+first — `git pull --rebase github main`. The script still works exactly the same
+when run locally.
 
 Put local test headers in `samples/` — it is gitignored precisely because a real
 header contains a real address.
