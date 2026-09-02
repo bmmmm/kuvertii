@@ -286,7 +286,11 @@ details.card > summary::-webkit-details-marker { display: none; }
 
 details.card > summary::before {
   /* The empty alternative text keeps the glyph out of the summary's
-     accessible name, so a screen reader announces the title, not "▸ title". */
+     accessible name, so a screen reader announces the title, not "▸ title".
+     The plain form first: an engine that does not know the alt-text syntax
+     (Firefox before 128, Safari before 17.4) drops that whole declaration and
+     keeps this one, so the marker never disappears — it is merely announced. */
+  content: "▸";
   content: "▸" / "";
   display: inline-block;
   flex: none;

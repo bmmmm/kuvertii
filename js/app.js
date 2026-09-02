@@ -30,8 +30,9 @@ const WIDE_SCREEN = '(min-width: 48rem)';
 
 /**
  * The same ceiling the CLI puts on the clipboard (js/clipboard.js): past this
- * a file is not a message any more, and `file.text()` on it would hand the tab
- * a string it cannot hold. Refused with a sentence rather than read slowly.
+ * a file is not a message any more, and decoding it would hand the tab a
+ * string it cannot hold. Checked on `file.size` before a byte is read, and
+ * refused with a sentence rather than read slowly.
  */
 const MAX_FILE_BYTES = 32 * 1024 * 1024;
 
