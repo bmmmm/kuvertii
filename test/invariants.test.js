@@ -352,7 +352,9 @@ test('a UTF-8 message file decodes exactly, and a windows-1252 one keeps its eur
   const utf8 = new TextEncoder().encode('Subject: Grüße — 5 €\n');
   assert.equal(textFromMessageBytes(utf8), 'Subject: Grüße — 5 €\n');
   // 0x80 is € in windows-1252 and a control character in ISO-8859-1: the
-  // superset is the right fallback because a Windows client wrote it.
+  // superset is the right fallback because a Windows client wrote it. This
+  // went red on CI's Node 20 the day it shipped — its TextDecoder answered
+  // 'windows-1252' with ISO-8859-1 — which is why the table is now ours.
   const cp1252 = Uint8Array.from([0x35, 0x20, 0x80, 0x0a]);
   assert.equal(textFromMessageBytes(cp1252), '5 €\n');
 });

@@ -536,15 +536,55 @@ export function decodeMailCharset(bytes, label) {
  * per byte, which a reader can recognise — the same result a paste from a
  * client that guessed wrong gives. Deciding per part, under each part's own
  * declared charset, would be better still and is not done here: the parts are
- * only known after the split, and the split needs text. Measured before
- * choosing: no byte value produces U+FFFD under windows-1252 (Node 26).
+ * only known after the split, and the split needs text. Total by
+ * construction: every byte maps to one code point in fromWindows1252, so no
+ * byte value can produce U+FFFD on any runtime.
  */
 export function textFromMessageBytes(bytes) {
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   } catch {
-    return new TextDecoder('windows-1252').decode(bytes);
+    return fromWindows1252(bytes);
   }
+}
+
+/**
+ * The 32 bytes where windows-1252 differs from ISO-8859-1, from the WHATWG
+ * index. Everything else in the range is the byte's own code point.
+ */
+const WINDOWS_1252_HIGH = [
+  0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021,
+  0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008d, 0x017d, 0x008f,
+  0x0090, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014,
+  0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d, 0x017e, 0x0178,
+];
+
+/**
+ * windows-1252 by table, not by TextDecoder.
+ *
+ * `new TextDecoder('windows-1252')` is not one decoder: Node 20 answers it
+ * with ICU's ISO-8859-1, so 0x80 came back as U+0080 where Node 26 and every
+ * browser give €. Measured on CI the day the fallback shipped — the euro test
+ * went red on the engines floor and green on the deploy version. Left to the
+ * runtime, a Windows client's curly quotes would have read as C1 control
+ * bytes in one terminal and as punctuation in another, and the controls card
+ * would have accused the sender on the first. A message must read the same
+ * everywhere this tool runs, so the differing bytes are spelled out here.
+ */
+function fromWindows1252(bytes) {
+  const units = new Uint16Array(bytes.length);
+  for (let i = 0; i < bytes.length; i += 1) {
+    const byte = bytes[i];
+    units[i] = byte >= 0x80 && byte < 0xa0 ? WINDOWS_1252_HIGH[byte - 0x80] : byte;
+  }
+  // In chunks: fromCharCode takes its arguments on the stack, and a 32 MB
+  // file would overflow it in one call.
+  const CHUNK = 8192;
+  let out = '';
+  for (let i = 0; i < units.length; i += CHUNK) {
+    out += String.fromCharCode.apply(null, units.subarray(i, i + CHUNK));
+  }
+  return out;
 }
 
 export function decodeEncodedWords(text) {

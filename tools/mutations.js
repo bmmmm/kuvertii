@@ -1586,11 +1586,23 @@ function decodeMailCharsetDisabledByMutation(bytes, label) {
     id: 'legacy-charset-fallback-invents-fffd',
     promise: 'Where a message is not UTF-8, the fallback decode is total: no byte becomes U+FFFD.',
     file: 'js/decode.js',
-    find: `    return new TextDecoder('windows-1252').decode(bytes);`,
+    find: `    return fromWindows1252(bytes);`,
     replace: `    return new TextDecoder('utf-8').decode(bytes);`,
     mustKill: ['a message file in any 8-bit charset never puts U+FFFD on screen'],
     // The fallback is the whole point of the strict first pass: a decoder that
     // could still fail would have moved the replacement character one line
     // down rather than out of the tool.
+  },
+
+  {
+    id: 'windows-1252-high-bytes-as-controls',
+    promise: 'The bytes 0x80–0x9F read as windows-1252 punctuation on every runtime, never as C1 control bytes.',
+    file: 'js/decode.js',
+    find: `    units[i] = byte >= 0x80 && byte < 0xa0 ? WINDOWS_1252_HIGH[byte - 0x80] : byte;`,
+    replace: `    units[i] = byte;`,
+    mustKill: ['a UTF-8 message file decodes exactly, and a windows-1252 one keeps its euro'],
+    // What Node 20's TextDecoder did, measured on CI: 0x80 as U+0080. A
+    // Windows client's curly quotes would then read as control bytes, and the
+    // controls card would accuse the sender of steering the reader's terminal.
   },
 ];
