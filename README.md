@@ -12,7 +12,7 @@ other half of the story: where the links actually go, which images report
 that you read it, and what really travels in the attachments.
 
 Paste the whole thing — "Show Original" in Gmail, "View Source" elsewhere —
-and both halves are read. A header alone still works exactly as before; the
+or open a saved `.eml`, and both halves are read. A header alone still works exactly as before; the
 paste decides. The body is **described, never rendered**: no image is
 fetched, no script runs, no attachment is opened, and every quoted snippet is
 made inert on its way to the screen.

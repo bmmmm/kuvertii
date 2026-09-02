@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { lookup, validate, verdictRows } from '../js/snapshot.js';
 import { analyseBody } from '../js/body.js';
 import { clearClipboard, readClipboard } from '../js/clipboard.js';
+import { textFromMessageBytes } from '../js/decode.js';
 import { hashedAddressRows } from '../js/emailhash.js';
 import { analyse } from '../js/findings.js';
 import { createKeyReader, isQuit, untilQuit } from '../js/keys.js';
@@ -162,7 +163,9 @@ function readStdin() {
   return new Promise((resolve, reject) => {
     const chunks = [];
     process.stdin.on('data', (chunk) => chunks.push(chunk));
-    process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    // Bytes to text through the same decoder the page uses on a file: a pipe
+    // carrying a legacy 8-bit message must not arrive full of U+FFFD.
+    process.stdin.on('end', () => resolve(textFromMessageBytes(Buffer.concat(chunks))));
     process.stdin.on('error', reject);
   });
 }
@@ -282,12 +285,14 @@ async function main(argv) {
   const file = args.find((arg) => !arg.startsWith('-'));
 
   if (file) {
-    const text = await readFile(file, 'utf8').catch((error) => {
+    // Bytes, not 'utf8': textFromMessageBytes in js/decode.js says why a
+    // message file must not be read the obvious way.
+    const bytes = await readFile(file).catch((error) => {
       process.stderr.write(`Cannot read ${file}: ${error.message}\n`);
       return null;
     });
-    if (text === null) return 1;
-    return (await report(text, renderer, process.stdout, { headersOnly })) ? 0 : 1;
+    if (bytes === null) return 1;
+    return (await report(textFromMessageBytes(bytes), renderer, process.stdout, { headersOnly })) ? 0 : 1;
   }
 
   if (!process.stdin.isTTY) {

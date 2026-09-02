@@ -5,6 +5,7 @@ import { checkHost } from './blocklist.js';
 import { verdictRows } from './snapshot.js';
 import { analyseBody } from './body.js';
 import { neutralise } from './control.js';
+import { textFromMessageBytes } from './decode.js';
 import { hashedAddressRows } from './emailhash.js';
 import { analyse } from './findings.js';
 import { parseParts, readTally, splitMessage } from './mime.js';
@@ -313,11 +314,14 @@ function clear() {
 /**
  * Read a message out of a file the reader chose or dropped.
  *
- * `file.text()` and nothing else: no FileReader handing back a data: URL, no
- * object URL, no fetch. The bytes go from the disk into the same string a paste
- * would have produced, and the file name is never rendered — it is usually the
- * subject line, sometimes the sender, and this page does not put either on
- * screen unless the message itself said so.
+ * `file.arrayBuffer()` and this tool's own decoder, nothing else: no FileReader
+ * handing back a data: URL, no object URL, no fetch — and not `file.text()`,
+ * which decodes as UTF-8 and writes U+FFFD wherever a legacy 8-bit body was
+ * not, before js/mime.js has seen a byte (textFromMessageBytes says why that
+ * matters). The bytes go from the disk into the same string a paste would have
+ * produced, and the file name is never rendered — it is usually the subject
+ * line, sometimes the sender, and this page does not put either on screen
+ * unless the message itself said so.
  */
 async function readMessageFile(file) {
   if (!file) return;
@@ -325,7 +329,7 @@ async function readMessageFile(file) {
     status.textContent = 'That file is larger than 32 MB, which no message reaches. It was not read — open the message file itself rather than an archive or a mailbox.';
     return;
   }
-  input.value = await file.text();
+  input.value = textFromMessageBytes(new Uint8Array(await file.arrayBuffer()));
   run();
 }
 

@@ -1545,4 +1545,52 @@ function decodeMailCharsetDisabledByMutation(bytes, label) {
     // hands the tab a string it cannot hold, and the page stops answering with
     // no message on screen saying why.
   },
+
+  {
+    id: 'file-decoded-by-the-browser',
+    promise: 'A message file is decoded by this tool, byte for byte, never by the browser\'s UTF-8 default.',
+    file: 'js/app.js',
+    find: `  input.value = textFromMessageBytes(new Uint8Array(await file.arrayBuffer()));`,
+    replace: `  input.value = new TextDecoder().decode(new Uint8Array(await file.arrayBuffer()));`,
+    mustKill: ['a file in a legacy charset is read as the sender wrote it, not as U+FFFD'],
+    // Found in review on the day the file button shipped: `file.text()` wrote
+    // U+FFFD over every byte of a latin-1 8bit body before js/mime.js saw one,
+    // and the page's own invariant — no invented U+FFFD on screen — was broken
+    // by the feature that had just been added.
+  },
+
+  {
+    id: 'cli-file-decoded-as-utf8',
+    promise: 'The terminal build reads a message file through the same decoder as the page.',
+    file: 'bin/kuvertii.js',
+    find: `    return (await report(textFromMessageBytes(bytes), renderer, process.stdout, { headersOnly })) ? 0 : 1;`,
+    replace: `    return (await report(bytes.toString('utf8'), renderer, process.stdout, { headersOnly })) ? 0 : 1;`,
+    mustKill: ['a file in a legacy charset reaches the terminal as the sender wrote it'],
+    // The terminal had carried this seam since its first file: readFile with
+    // 'utf8' is the obvious call, and it was the wrong one for the same reason.
+  },
+
+  {
+    id: 'cli-pipe-decoded-as-utf8',
+    promise: 'A pipe into the terminal build is read through the same decoder as a file.',
+    file: 'bin/kuvertii.js',
+    find: `    process.stdin.on('end', () => resolve(textFromMessageBytes(Buffer.concat(chunks))));`,
+    replace: `    process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));`,
+    mustKill: ['a pipe carrying a legacy charset is read the same way'],
+    // Two entry points, one decoder. A fix that reached the file and not the
+    // pipe would have left `cat mail.eml | kuvertii` with the bug it removed
+    // from `kuvertii mail.eml`.
+  },
+
+  {
+    id: 'legacy-charset-fallback-invents-fffd',
+    promise: 'Where a message is not UTF-8, the fallback decode is total: no byte becomes U+FFFD.',
+    file: 'js/decode.js',
+    find: `    return new TextDecoder('windows-1252').decode(bytes);`,
+    replace: `    return new TextDecoder('utf-8').decode(bytes);`,
+    mustKill: ['a message file in any 8-bit charset never puts U+FFFD on screen'],
+    // The fallback is the whole point of the strict first pass: a decoder that
+    // could still fail would have moved the replacement character one line
+    // down rather than out of the tool.
+  },
 ];

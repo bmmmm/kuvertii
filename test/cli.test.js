@@ -153,3 +153,32 @@ test('a report longer than a pipe buffer arrives whole', async () => {
   assert.ok(stdout.length > 70_000, `only ${stdout.length} bytes came back`);
   assert.match(stdout.trimEnd().split('\n').pop(), /header fields read\. Nothing left this machine\./);
 });
+
+// A message file is bytes, and `readFile(path, 'utf8')` turned every byte that
+// was not UTF-8 into U+FFFD before the parser saw it. The second Subject: is
+// the cheapest way to get a header value printed: the contradiction card quotes
+// both copies, so the umlauts either come out as written or as the one
+// character that means this tool failed.
+const LATIN1_MESSAGE = Buffer.from(
+  'From: sender@example.org\nTo: reader@example.net\n'
+  + 'Date: Mon, 17 Aug 2026 06:12:10 +0000\nMessage-ID: <latin1@example.org>\n'
+  + 'Subject: Hello\nSubject: Best\xe4tigung n\xf6tig\n\nregards\n',
+  'latin1',
+);
+
+test('a file in a legacy charset reaches the terminal as the sender wrote it', async () => {
+  const path = join(tmpdir(), 'kuvertii-latin1.eml');
+  await writeFile(path, LATIN1_MESSAGE);
+
+  const { code, stdout } = await cli([path]);
+  assert.equal(code, 0);
+  assert.match(stdout, /Bestätigung/, 'the umlauts survived the read');
+  assert.ok(!stdout.includes('�'), 'no replacement character was invented');
+});
+
+test('a pipe carrying a legacy charset is read the same way', async () => {
+  const { code, stdout } = await cli([], LATIN1_MESSAGE);
+  assert.equal(code, 0);
+  assert.match(stdout, /Bestätigung/);
+  assert.ok(!stdout.includes('�'));
+});

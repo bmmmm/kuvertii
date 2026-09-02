@@ -513,6 +513,40 @@ export function decodeMailCharset(bytes, label) {
   return fromHz(bytes);
 }
 
+/**
+ * A whole message, from bytes to text, without inventing a character.
+ *
+ * Both front ends receive a message as text: the page from a paste, which the
+ * operating system already decoded, and the terminal from a file or a pipe,
+ * which it did not. A file is bytes, and the obvious call — `file.text()`,
+ * `readFile(path, 'utf8')` — decodes them as UTF-8 and writes U+FFFD wherever
+ * they were not. That is the one character on a report that can only have come
+ * from this tool (test/invariants.test.js), and here it was inserted before
+ * js/mime.js had seen a byte: an 8bit body labelled iso-8859-1 arrived with its
+ * umlauts already replaced, and so did the raw 8-bit header values some
+ * senders still write. Found in review of the file-open feature, on the day it
+ * was written; the terminal had carried the same seam since its first file.
+ *
+ * Strict UTF-8 first, which nearly every message written this decade is. Where
+ * that fails, windows-1252 — chosen because it is total: all 256 byte values
+ * map to a character, so the decode cannot fail and cannot invent anything —
+ * and because it is the superset of ISO-8859-1 every mail client has read for
+ * thirty years. A message in a third 8-bit charset (koi8-r, iso-8859-2) comes
+ * out as wrong letters rather than as U+FFFD: still the sender's bytes, one
+ * per byte, which a reader can recognise — the same result a paste from a
+ * client that guessed wrong gives. Deciding per part, under each part's own
+ * declared charset, would be better still and is not done here: the parts are
+ * only known after the split, and the split needs text. Measured before
+ * choosing: no byte value produces U+FFFD under windows-1252 (Node 26).
+ */
+export function textFromMessageBytes(bytes) {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder('windows-1252').decode(bytes);
+  }
+}
+
 export function decodeEncodedWords(text) {
   // RFC 2047 §6.2: whitespace separating two adjacent encoded-words is removed
   // on display — it is there only so a long run can be split across words (and

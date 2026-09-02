@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { analyseBody } from '../js/body.js';
+import { textFromMessageBytes } from '../js/decode.js';
 import { ALL_CLEAR_TITLE, analyse, PASSED_BUT_JUNK_TITLE } from '../js/findings.js';
 import { parseParts, splitMessage } from '../js/mime.js';
 import { createRenderer } from '../js/terminal.js';
@@ -317,4 +318,41 @@ test('a charset only mail uses reads as the message its 8-bit twin does', () => 
   }
 
   assert.deepEqual(offenders.slice(0, 5), [], `${offenders.length} message(s) read unlike their twin`);
+});
+
+test('a message file in any 8-bit charset never puts U+FFFD on screen', () => {
+  // The file and pipe paths hand bytes to textFromMessageBytes; a paste never
+  // gets here. Every byte value, once as an 8bit body under a latin-1 label and
+  // once as a raw header value: the decoder may pick the wrong letters for a
+  // charset it was not told about, but never the one character that means it
+  // failed — U+FFFD is the tool's own signature, not the sender's.
+  const every = Uint8Array.from({ length: 256 }, (_, i) => i);
+  const head = new TextEncoder().encode(
+    'From: a@example.org\nTo: b@example.net\nSubject: x\nX-Note: ',
+  );
+  const middle = new TextEncoder().encode(
+    '\nContent-Type: text/plain; charset=iso-8859-1\nContent-Transfer-Encoding: 8bit\n\n',
+  );
+  // A header value cannot carry the line breaks in `every`, so it gets the
+  // high half only; the body gets all 256.
+  const bytes = Uint8Array.from([...head, ...every.subarray(0xa0), ...middle, ...every]);
+
+  const text = textFromMessageBytes(bytes);
+  assert.ok(!text.includes('�'), 'the decode itself invented nothing');
+
+  const { headerText, bodyText, bodyOnly } = splitMessage(text);
+  const headers = parseHeaders(headerText);
+  const { parts } = parseParts(headers, bodyText);
+  const findings = [...analyse(headers), ...analyseBody(parts, { headers, bodyOnly })];
+  const rendered = JSON.stringify(findings);
+  assert.ok(!rendered.includes('�'), 'nothing rendered carries U+FFFD');
+});
+
+test('a UTF-8 message file decodes exactly, and a windows-1252 one keeps its euro', () => {
+  const utf8 = new TextEncoder().encode('Subject: Grüße — 5 €\n');
+  assert.equal(textFromMessageBytes(utf8), 'Subject: Grüße — 5 €\n');
+  // 0x80 is € in windows-1252 and a control character in ISO-8859-1: the
+  // superset is the right fallback because a Windows client wrote it.
+  const cp1252 = Uint8Array.from([0x35, 0x20, 0x80, 0x0a]);
+  assert.equal(textFromMessageBytes(cp1252), '5 €\n');
 });

@@ -53,9 +53,16 @@ function fire(node, type, event = {}) {
 /** Let a `setTimeout(…, 0)` and any pending microtask run. */
 const settle = () => new Promise((resolve) => { setTimeout(resolve, 0); });
 
-/** A File as this page uses it: a size to check and a text() to await. */
-function stubFile(text, size = text.length) {
-  return { size, async text() { return text; } };
+/**
+ * A File as this page uses it: a size to check and bytes to await — UTF-8 from
+ * `text` unless `bytes` are given. No text() on purpose: the browser's own
+ * UTF-8 decode is exactly what the page must not use on a message file.
+ */
+function stubFile(text, size, bytes = new TextEncoder().encode(text)) {
+  return {
+    size: size ?? bytes.byteLength,
+    async arrayBuffer() { return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength); },
+  };
 }
 
 /** The findings' cards, without the overview that leads them. */
@@ -408,7 +415,7 @@ test('a file too large to be a message is refused rather than read', async () =>
   let touched = false;
   nodes['#file-input'].files = [{
     size: 33 * 1024 * 1024,
-    async text() { touched = true; return BULK_HEADER; },
+    async arrayBuffer() { touched = true; return new TextEncoder().encode(BULK_HEADER).buffer; },
   }];
 
   fire(nodes['#file-input'], 'change', { target: nodes['#file-input'] });
@@ -453,4 +460,22 @@ test('the textarea shrinks once it has been read, and opens again to edit', asyn
   assert.ok(area.classList.contains('input-area--read'));
   for (const handler of nodes['#clear'].handlers.click) handler();
   assert.equal(area.classList.contains('input-area--read'), false, 'and clear leaves nothing collapsed');
+});
+
+test('a file in a legacy charset is read as the sender wrote it, not as U+FFFD', async () => {
+  // `file.text()` decodes as UTF-8 and writes U+FFFD where these bytes are
+  // not — before js/mime.js has seen one. The invariant that no invented
+  // U+FFFD reaches the screen has to hold from the file picker onwards, so the
+  // page decodes the bytes itself (js/decode.js, textFromMessageBytes).
+  const nodes = await loadApp();
+  const latin1 = Uint8Array.from(`Comments: Best\xe4tigung n\xf6tig\n${BULK_HEADER}`, (c) => c.charCodeAt(0));
+  nodes['#file-input'].files = [stubFile('', undefined, latin1)];
+
+  fire(nodes['#file-input'], 'change', { target: nodes['#file-input'] });
+  await settle();
+
+  assert.match(nodes['#header-input'].value, /Bestätigung nötig/, 'the umlauts survived the read');
+  assert.ok(!nodes['#header-input'].value.includes('�'), 'no replacement character was invented');
+  assert.ok(nodes['#results'].children.length > 0, 'and the message was read');
+  assert.ok(!renderedText(nodes['#results']).includes('�'), 'nothing on screen carries one either');
 });

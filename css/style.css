@@ -285,7 +285,9 @@ details.card > summary {
 details.card > summary::-webkit-details-marker { display: none; }
 
 details.card > summary::before {
-  content: "▸";
+  /* The empty alternative text keeps the glyph out of the summary's
+     accessible name, so a screen reader announces the title, not "▸ title". */
+  content: "▸" / "";
   display: inline-block;
   flex: none;
   color: currentColor;
