@@ -1653,4 +1653,20 @@ function decodeMailCharsetDisabledByMutation(bytes, label) {
     // window. Uncounted, the frame is cleared at every element boundary the
     // pointer crosses.
   },
+
+  {
+    id: 'file-read-rejection-unhandled',
+    promise: 'A file this page cannot read is said to be unread, not passed over in silence.',
+    file: 'js/app.js',
+    find: `    return;
+  }
+  input.value = text;`,
+    replace: `    throw error;
+  }
+  input.value = text;`,
+    mustKill: ['a file that will not be read is reported as unread, by either route'],
+    // Both call sites invoke this as a bare statement, so a rethrow is an
+    // unhandled rejection: nothing changes on screen and the previous report
+    // stays up as though it were about this file.
+  },
 ];

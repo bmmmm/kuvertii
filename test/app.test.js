@@ -432,6 +432,36 @@ test('a file too large to be a message is refused rather than read', async () =>
 /** A drag as the browser describes one: the cargo is in `types`, not in `files`. */
 const fileDrag = (...files) => ({ dataTransfer: { types: ['Files'], files } });
 
+test('a file that will not be read is reported as unread, by either route', async () => {
+  // Without the catch this test does not merely fail: the two call sites invoke
+  // an async function as a bare statement, so the rejection is unhandled and
+  // Node tears down the whole test file around it.
+  const unreadable = {
+    size: 512,
+    async arrayBuffer() { throw Object.assign(new Error('device stalled'), { name: 'NotReadableError' }); },
+  };
+
+  for (const hand of ['picker', 'drop']) {
+    const nodes = await loadApp();
+    if (hand === 'picker') {
+      nodes['#file-input'].files = [unreadable];
+      fire(nodes['#file-input'], 'change', { target: nodes['#file-input'] });
+    } else {
+      fire(nodes.window, 'drop', fileDrag(unreadable));
+    }
+    await settle();
+
+    assert.equal(nodes['#header-input'].value, '', `${hand}: nothing was loaded`);
+    assert.equal(nodes['#results'].children.length, 0, `${hand}: and no report claims otherwise`);
+    assert.match(nodes['#status'].textContent, /could not be read/, `${hand}: the reader is told`);
+    assert.match(nodes['#status'].textContent, /NotReadableError/, `${hand}: and what kind of failure it was`);
+    assert.ok(
+      !nodes['#status'].textContent.includes('device stalled'),
+      `${hand}: the browser's prose stays out — it can quote the file name, which is the subject line`,
+    );
+  }
+});
+
 test('a file dropped anywhere on the page is read, not opened by the browser', async () => {
   // The guards are on `window` because `#results` is a sibling of the input
   // area, not a child: after a report is rendered it is most of the screen, and

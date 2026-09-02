@@ -330,7 +330,26 @@ async function readMessageFile(file) {
     status.textContent = 'That file is larger than 32 MB, which no message reaches. It was not read — open the message file itself rather than an archive or a mailbox.';
     return;
   }
-  input.value = textFromMessageBytes(new Uint8Array(await file.arrayBuffer()));
+  let text;
+  try {
+    text = textFromMessageBytes(new Uint8Array(await file.arrayBuffer()));
+  } catch (error) {
+    // Caught in here rather than at the call sites: one wording, and no drift
+    // when a third way of handing over a file arrives. Uncaught this was worse
+    // than silent — the two call sites invoke an async function as a bare
+    // statement, so a rejected `arrayBuffer()` (a file removed between the pick
+    // and the read, a permission withdrawn, a directory dropped) became an
+    // unhandled rejection: nothing changed on screen, and the reader was left
+    // looking at the previous report as though it were about this file.
+    //
+    // The error's name, never its message: a DOMException name comes from a
+    // fixed vocabulary, while the message is the browser's own prose and may
+    // quote the file's name — which is usually the subject line, sometimes the
+    // sender, and is deliberately never put on this page.
+    status.textContent = `That file could not be read, so nothing on this page is about it. Try opening it again, or paste the message instead. (${error?.name || 'the read failed'})`;
+    return;
+  }
+  input.value = text;
   run();
 }
 
