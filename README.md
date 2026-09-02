@@ -321,9 +321,11 @@ loopback-only and serves an allowlist.
 `tools/build-blocklist.mjs` also accepts a path to an already-downloaded feed,
 so the build can be reproduced and inspected without network access.
 
-`js/psl.js` no longer needs a manual refresh: `.github/workflows/psl.yml` runs
-`tools/build-psl.mjs` monthly and commits the result. The script still works
-exactly the same when run locally.
+`js/psl.js` no longer needs a manual reminder: `.github/workflows/psl.yml` runs
+`tools/build-psl.mjs` monthly, runs the suite on the result, and opens a pull
+request when the list changed — never a commit to `main`, which is a mirror of
+the Forgejo origin here. The script still works exactly the same when run
+locally.
 
 Put local test headers in `samples/` — it is gitignored precisely because a real
 header contains a real address.

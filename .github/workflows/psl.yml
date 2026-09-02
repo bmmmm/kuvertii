@@ -9,7 +9,8 @@ on:
     - cron: '13 5 1 * *'
   workflow_dispatch:
 
-# Read-only by default; only the job that may push gets `contents: write`.
+# Read-only by default; only the job that pushes a branch and opens the pull
+# request gets to write. main itself is never written by this workflow.
 permissions:
   contents: read
 
@@ -18,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -28,19 +30,36 @@ jobs:
       # A refreshed list that breaks a test must never land unattended.
       - run: node --test
 
-      - name: Commit and push if the list changed
+      # A pull request, never a push to main. This repository's main is a
+      # mirror of its Forgejo origin, so a commit that exists only on GitHub
+      # would put the two out of step — the same reason Dependabot's bumps are
+      # adopted locally here rather than merged on GitHub. The refresh is
+      # reviewed and pulled like any other change, and reaches the live site
+      # with the pages run that follows the merge.
+      #
+      # `gh pr create` with the workflow token needs the repository setting
+      # "Allow GitHub Actions to create and approve pull requests" (Settings →
+      # Actions → General), off by default and off at the time of writing:
+      #   gh api -X PUT repos/bmmmm/kuvertii/actions/permissions/workflow \
+      #     -f default_workflow_permissions=read \
+      #     -F can_approve_pull_request_reviews=true
+      # Until it is on, the branch is pushed and this step fails on the PR,
+      # which is the loud failure wanted — never a quiet push to main.
+      - name: Open a pull request if the list changed
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           if git diff --quiet -- js/psl.js; then
             echo "js/psl.js unchanged"
             exit 0
           fi
+          branch="psl/refresh-$(date -u +%Y-%m-%d)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
           git add js/psl.js
           git commit -m "chore: refresh the public suffix list"
-          # A push made with the default GITHUB_TOKEN does not trigger other
-          # workflows, so this does not kick off pages.yml — the refreshed
-          # list reaches the live site with the next daily 04:17 UTC run
-          # rather than immediately. Acceptable: the list is already
-          # committed and correct, just not yet deployed.
-          git push
+          git push -u origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "chore: refresh the public suffix list" \
+            --body "tools/build-psl.mjs, run by .github/workflows/psl.yml. The suite passed on the refreshed list before this was opened."
