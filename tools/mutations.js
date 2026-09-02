@@ -1819,4 +1819,28 @@ function decodeMailCharsetDisabledByMutation(bytes, label) {
     // the control bytes a real hostname yields. That gate had two behaviour
     // tests and no mutation.
   },
+
+  {
+    id: 'coarse-pointer-field-zooms-ios',
+    promise: 'On a phone the field is 16px, so focusing it does not zoom the page and leave it there.',
+    file: 'css/style.css',
+    find: `  textarea { font-size: 1rem; }`,
+    replace: `  textarea { font-size: 0.8rem; }`,
+    mustKill: ['a coarse pointer gets a field iOS will not zoom and controls a thumb can hit'],
+    // iOS Safari zooms into any field whose text is under 16px and does not
+    // zoom back out: the reader spends the rest of the visit panning a report
+    // that is wider than the screen. Found by holding a phone, and until now
+    // held in place only by whoever remembered why the line was there.
+  },
+
+  {
+    id: 'coarse-pointer-buttons-too-small-to-hit',
+    promise: 'On a phone every control is at least 44px tall.',
+    file: 'css/style.css',
+    find: `    min-height: 44px;`,
+    replace: `    min-height: 30px;`,
+    mustKill: ['a coarse pointer gets a field iOS will not zoom and controls a thumb can hit'],
+    // Apple's own figure for what a thumb hits reliably. Three buttons sit in a
+    // row under the field, and the middle one discards the report.
+  },
 ];

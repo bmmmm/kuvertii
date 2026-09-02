@@ -273,3 +273,36 @@ test('the walk sees a module however its import is written', () => {
   assert.deepEqual(seen("export { x } from './a.js';"), ['./a.js'], 're-export');
   assert.deepEqual(seen('// import the thing we do not do'), [], 'prose is not an import');
 });
+
+/**
+ * The two rules in the phone block that are corrections, not taste.
+ *
+ * Both were found by holding a phone, and neither had a test — so the only
+ * thing standing between them and a tidy-up was that somebody remembered why
+ * they were there. A hand check that does not become a gate has to be repeated
+ * for the life of the project, and is skipped the one time it matters.
+ *
+ * iOS Safari zooms into any field whose text is under 16px and does NOT zoom
+ * back out afterwards: the page then stays wider than the screen for the rest
+ * of the visit, and the reader is left panning a report sideways. 44px is the
+ * smallest control Apple's own guidance says a thumb hits reliably.
+ */
+test('a coarse pointer gets a field iOS will not zoom and controls a thumb can hit', () => {
+  const css = read('css/style.css');
+  const block = css.match(/@media \(pointer: coarse\) \{([\s\S]*?)\n\}/);
+  assert.ok(block, 'the phone block is gone entirely');
+
+  const fontSize = block[1].match(/textarea \{[^}]*font-size:\s*([\d.]+)rem/);
+  assert.ok(fontSize, 'no font-size for the field under a coarse pointer');
+  assert.ok(
+    parseFloat(fontSize[1]) >= 1,
+    `${fontSize[1]}rem is under 16px, so iOS Safari zooms in on focus and never back out`,
+  );
+
+  const tapTarget = block[1].match(/button \{[^}]*min-height:\s*(\d+)px/);
+  assert.ok(tapTarget, 'no minimum height for a button under a coarse pointer');
+  assert.ok(
+    Number(tapTarget[1]) >= 44,
+    `${tapTarget[1]}px is under the 44px a thumb hits reliably`,
+  );
+});
