@@ -171,6 +171,46 @@ test('clear wipes the input and the rendered output', async () => {
   assert.equal(nodes['#header-input'].value, '');
   assert.equal(nodes['#results'].children.length, 0);
   assert.equal(nodes['#empty-state'].hidden, false);
+  assert.equal(
+    globalThis.document.activeElement,
+    nodes['#header-input'],
+    'the button is a gesture, so the cursor goes back where the next paste lands',
+  );
+});
+
+test('a restored page discards the message without calling up the keyboard', async () => {
+  // Back-navigation out of the bfcache restores form fields, which would
+  // resurrect a header the reader believed they had discarded. Discarding it is
+  // right; focusing the field is not — on a phone that raises the keyboard over
+  // a page nobody tapped.
+  const nodes = await loadApp();
+  nodes['#header-input'].value = BULK_HEADER;
+  fire(nodes['#analyse'], 'click');
+  assert.ok(nodes['#results'].children.length > 0, 'precondition: something rendered');
+
+  fire(nodes.window, 'pageshow', { persisted: true });
+
+  assert.equal(nodes['#header-input'].value, '', 'the restored header is gone');
+  assert.equal(nodes['#results'].children.length, 0, 'and so is the report about it');
+  assert.notEqual(
+    globalThis.document.activeElement,
+    nodes['#header-input'],
+    'no keyboard without a gesture',
+  );
+});
+
+test('an ordinary load leaves a freshly pasted message alone', async () => {
+  // `pageshow` fires on every navigation, restored or not. Without the
+  // `persisted` check this wipes the report a reader has just produced —
+  // which is worse than the keyboard it was added to stop.
+  const nodes = await loadApp();
+  nodes['#header-input'].value = BULK_HEADER;
+  fire(nodes['#analyse'], 'click');
+
+  fire(nodes.window, 'pageshow', { persisted: false });
+
+  assert.equal(nodes['#header-input'].value, BULK_HEADER, 'the message is still there');
+  assert.ok(nodes['#results'].children.length > 0, 'and the report with it');
 });
 
 test('empty input renders nothing and does not throw', async () => {

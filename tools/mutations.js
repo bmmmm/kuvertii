@@ -1669,4 +1669,28 @@ function decodeMailCharsetDisabledByMutation(bytes, label) {
     // unhandled rejection: nothing changes on screen and the previous report
     // stays up as though it were about this file.
   },
+
+  {
+    id: 'pageshow-focuses-the-restored-field',
+    promise: 'Coming back to this page never raises the keyboard on its own.',
+    file: 'js/app.js',
+    find: `  if (event.persisted) reset();`,
+    replace: `  if (event.persisted) clear();`,
+    mustKill: ['a restored page discards the message without calling up the keyboard'],
+    // What `clear()` did here until it was split: discarding the restored
+    // header is right, taking the focus is not — on a phone that is a keyboard
+    // over a page the reader only glanced back at.
+  },
+
+  {
+    id: 'pageshow-resets-every-visit',
+    promise: 'Only a page restored from the back/forward cache is cleared, never an ordinary load.',
+    file: 'js/app.js',
+    find: `  if (event.persisted) reset();`,
+    replace: `  reset();`,
+    mustKill: ['an ordinary load leaves a freshly pasted message alone'],
+    // The `persisted` condition had no coverage at all, so a reset on every
+    // pageshow — which throws away the report the reader just produced — read
+    // exactly like the fix.
+  },
 ];

@@ -303,12 +303,28 @@ function run() {
   }
 }
 
-function clear() {
+/**
+ * Everything a clear does except take the focus.
+ *
+ * Split out for `pageshow`. A back-navigation out of the bfcache has to discard
+ * the restored header, but it is not a gesture the reader made: on a phone,
+ * focusing the field there raises the keyboard over a page they only came back
+ * to glance at, with no tap of theirs behind it. A named twin rather than
+ * `clear(false)` — the boolean would need a comment at the call site, this
+ * needs none.
+ */
+function reset() {
   input.value = '';
   results.replaceChildren();
   emptyState.hidden = false;
   status.textContent = '';
   inputArea.classList.remove('input-area--read');
+}
+
+function clear() {
+  reset();
+  // The button is a gesture, so the cursor goes back where the next paste will
+  // land — and on a phone the keyboard coming up is the answer to the tap.
   input.focus();
 }
 
@@ -444,6 +460,6 @@ window.addEventListener('drop', (event) => {
 // Browsers restore form fields on reload and on back-navigation. For this page
 // that would resurrect a header the user believed they had discarded.
 window.addEventListener('pageshow', (event) => {
-  if (event.persisted) clear();
+  if (event.persisted) reset();
 });
 input.value = '';
