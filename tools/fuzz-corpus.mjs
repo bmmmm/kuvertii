@@ -36,10 +36,23 @@ import { checkFindings, checkScreen, stripAnsi, withBridges } from './report-inv
 
 // ----------------------------------------------------------------- the source
 
-/** The labeller's generator from test/snapshot.test.js, one stream per run. */
+/**
+ * One deterministic stream per run, never Math.random.
+ *
+ * Not the labeller's generator from test/snapshot.test.js, though this started
+ * as it: `state * 1103515245` runs past 2^53, so the product is rounded and the
+ * stream is IEEE-754 arithmetic rather than the LCG it looks like. Measured, it
+ * repeats after 11154 draws — about eighty per message here, so `--count 2000`
+ * would have handed back the same hundred and forty messages fourteen times and
+ * called it two thousand. `Math.imul` is exact 32-bit, which makes this the LCG
+ * it claims to be, with a full period and the same reproducibility.
+ */
 function rng(seed = 1) {
   let state = (seed >>> 0) || 1;
-  const next = () => (state = (state * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const next = () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
   return {
     int: (n) => Math.floor(next() * n),
     pick: (list) => list[Math.floor(next() * list.length)],
