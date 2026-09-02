@@ -1745,4 +1745,18 @@ function decodeMailCharsetDisabledByMutation(bytes, label) {
     // A probe that cannot say no passes every corpus it is pointed at, and the
     // clean bill it hands back means only that it is blind.
   },
+
+  {
+    id: 'encoded-word-substitutes-instead-of-refusing',
+    promise: 'A word whose bytes are not the charset it names is shown as written, never as U+FFFD.',
+    file: 'js/decode.js',
+    find: `            ?? new TextDecoder(label, { fatal: true }).decode(bytes);`,
+    replace: `            ?? new TextDecoder(label, { fatal: false }).decode(bytes);`,
+    mustKill: ['an encoded-word whose bytes are not its charset is shown as it was written'],
+    // Found by tools/fuzz-corpus.mjs on its first generated message: an
+    // attachment named `=?utf-8?Q?Best=C3?=.exe` reached the alert card as
+    // `Best\uFFFD.exe`. The line above already promised to keep an unreadable
+    // word raw; with fatal:false it kept that promise only for a charset label
+    // the runtime had never heard of.
+  },
 ];

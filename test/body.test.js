@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { analyseBody } from '../js/body.js';
+import { decodeEncodedWords } from '../js/decode.js';
 import { parseParts, splitMessage } from '../js/mime.js';
 import { createRenderer } from '../js/terminal.js';
 import { parseHeaders } from '../js/unfold.js';
@@ -551,6 +552,40 @@ test('a language-tagged encoded-word filename is decoded before the danger check
   // rather than force-decoded into a wrong reading.
   assert.equal(cardFor(`=?utf-8*en?B?${enc('notes.txt')}?=`).items[0].level, null, 'a safe name stays quiet');
   assert.equal(cardFor(`=?utf-8?B?${enc('report.exe')}?=`).items[0].level, 'bad', 'the plain form still fires');
+});
+
+test('an encoded-word whose bytes are not its charset is shown as it was written', () => {
+  // The other end of the same rule. `TextDecoder(label, { fatal: false })`
+  // substitutes U+FFFD byte by byte where the payload is not valid in the
+  // charset it names, so an attachment called `=?utf-8?Q?Best=C3?=.exe` — a
+  // UTF-8 sequence cut off mid-character, which a truncated download or a
+  // mailbox cut at a block boundary produces — reached the alert card as
+  // `Best\uFFFD.exe`. That is a filename no client will ever show, printed as
+  // fact on the sharpest card in the report, and U+FFFD is the one character on
+  // a report that can only have come from this tool. RFC 2047 §6.3: display an
+  // undecodable word as it was written, which is also the only form still true.
+  const { headerText, bodyText } = splitMessage([
+    'Content-Type: multipart/mixed; boundary="B"',
+    '',
+    '--B',
+    'Content-Type: application/octet-stream',
+    'Content-Disposition: attachment; filename="=?utf-8?Q?Best=C3?=.exe"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    'AAAAAA==',
+    '--B--',
+  ].join('\n'));
+  const { parts } = parseParts(parseHeaders(headerText), bodyText);
+  const card = analyseBody(parts).find((f) => f.id === 'attachments');
+
+  assert.ok(!JSON.stringify(card).includes('\uFFFD'), 'no replacement character was invented');
+  assert.match(card.items[0].label, /Best=C3/, 'the reader is shown the bytes the sender wrote');
+  assert.equal(card.items[0].level, 'bad', 'and the .exe is still read off the end of it');
+
+  // The boundary: a word that decodes cleanly still decodes, and a U+FFFD the
+  // sender genuinely encoded is still theirs to show.
+  assert.equal(decodeEncodedWords('=?utf-8?Q?Best=C3=A4tigung?=.pdf'), 'Bestätigung.pdf');
+  assert.equal(decodeEncodedWords('=?utf-8?B?77+9?='), '\uFFFD', 'EF BF BD spells one, so it is not invented');
 });
 
 test('a filename split across RFC 2231 continuation segments is reassembled first', () => {

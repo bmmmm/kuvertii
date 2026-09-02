@@ -648,8 +648,20 @@ export function decodeEncodedWords(text) {
           // the Encoding Standard's, including its throw for a label it does
           // not know, which is what keeps an unreadable word raw rather than
           // rendered as somebody's guess.
+          //
+          // `fatal: true` for the same reason, one step further in. With
+          // `fatal: false` that promise held only for a charset label this
+          // runtime had never heard of: a label it knows perfectly well, over
+          // bytes that are not valid in it, was substituted character by
+          // character into U+FFFD instead — the decoder's own verdict on its own
+          // output, rendered as though it were the sender's text. An attachment
+          // named `=?utf-8?Q?Best=C3?=.exe` reached an alert card as
+          // `Best\uFFFD.exe`: a filename no client will ever show, printed as
+          // fact on the sharpest card in the report. RFC 2047 §6.3 says an
+          // undecodable word should be displayed as it was written, which is
+          // also the only form that is still true.
           return decodeMailCharset(bytes, label)
-            ?? new TextDecoder(label, { fatal: false }).decode(bytes);
+            ?? new TextDecoder(label, { fatal: true }).decode(bytes);
         } catch {
           return whole;
         }
