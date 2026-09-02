@@ -459,6 +459,88 @@ test('a drag carrying no file is left to the browser', async () => {
   );
 });
 
+test('a file with nothing in it says so rather than doing nothing', async () => {
+  // The one refusal that used to answer with nothing at all: `run()` clears the
+  // report and returns on blank input, so a reader who opened an empty file
+  // watched the page not change and could not tell whether it had worked.
+  const nodes = await loadApp();
+  nodes['#file-input'].files = [stubFile('')];
+
+  fire(nodes['#file-input'], 'change', { target: nodes['#file-input'] });
+  await settle();
+
+  assert.match(nodes['#status'].textContent, /no message in that/i);
+  assert.match(nodes['#status'].textContent, /folder/, 'which is what a dropped directory is, too');
+  assert.equal(nodes['#results'].children.length, 0);
+});
+
+test('a file of exactly the ceiling is read; one byte more is not', async () => {
+  // The boundary is inclusive on purpose, and inclusive is the half a `>` can
+  // be flipped to `>=` without any test noticing.
+  const bytes = new TextEncoder().encode(BULK_HEADER);
+
+  const at = await loadApp();
+  at['#file-input'].files = [stubFile('', 32 * 1024 * 1024, bytes)];
+  fire(at['#file-input'], 'change', { target: at['#file-input'] });
+  await settle();
+  assert.equal(at['#header-input'].value, BULK_HEADER, '32 MB exactly is read');
+  assert.ok(at['#results'].children.length > 0);
+
+  const over = await loadApp();
+  over['#file-input'].files = [stubFile('', 32 * 1024 * 1024 + 1, bytes)];
+  fire(over['#file-input'], 'change', { target: over['#file-input'] });
+  await settle();
+  assert.equal(over['#header-input'].value, '', 'one byte more is not');
+  assert.match(over['#status'].textContent, /32 MB/);
+});
+
+test('several files at once: the first is read, and the rest are accounted for', async () => {
+  // One report is about one message. Reading the first silently left a report
+  // that looked as though it covered the stack the reader had dropped.
+  for (const hand of ['picker', 'drop']) {
+    const nodes = await loadApp();
+    const files = [stubFile(BULK_HEADER), stubFile('From: second@b.example\n'), stubFile('From: third@b.example\n')];
+    if (hand === 'picker') {
+      nodes['#file-input'].files = files;
+      fire(nodes['#file-input'], 'change', { target: nodes['#file-input'] });
+    } else {
+      fire(nodes.window, 'drop', { dataTransfer: { types: ['Files'], files } });
+    }
+    await settle();
+
+    assert.equal(nodes['#header-input'].value, BULK_HEADER, `${hand}: the first is the one read`);
+    assert.match(nodes['#status'].textContent, /first of 3 files/, `${hand}: and the reader is told`);
+  }
+});
+
+test('a verdict for a message the reader has moved on from never reaches the next report', async () => {
+  // The blocklist check is asynchronous and the row it appends is captured per
+  // render. A second reading starting before the first check returns must
+  // therefore see nothing of it: the list it was appended to is detached by
+  // `results.replaceChildren()`, and a late verdict about a host in a message
+  // that is no longer on screen is the one thing worse than no verdict.
+  const nodes = await loadApp();
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  globalThis.fetch = async () => { await held; throw new Error('offline in tests'); };
+
+  nodes['#header-input'].value = 'From: a@b.example\nTo: r@x.example\nList-Unsubscribe: <https://track.example/u/abc>\n';
+  fire(nodes['#analyse'], 'click');
+  await settle();
+
+  nodes['#header-input'].value = 'From: c@d.example\nTo: r@x.example\n';
+  fire(nodes['#analyse'], 'click');
+  await settle();
+
+  release();
+  await settle();
+  await settle();
+
+  const shown = renderedText(nodes['#results']);
+  assert.ok(!/track\.example/.test(shown), 'no host from the previous message is on this report');
+  assert.ok(!/blocklist check did not complete/.test(shown), 'nor the note about checking it');
+});
+
 test('the textarea shrinks once it has been read, and opens again to edit', async () => {
   const nodes = await loadApp();
   const area = nodes['#input-area'];

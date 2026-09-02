@@ -506,10 +506,17 @@ test('a hop named after an encoded identifier is decoded', () => {
 test('an ordinary hostname is never reported as an encoded identifier', () => {
   // Forced through base64 these yield control bytes, not text — the property
   // that separates them, since an account number reads as unremarkable prose.
+  //
+  // `gateway-99` is the one that reaches the character-class gate: it is valid
+  // base64, it is long enough, and it decodes to six high bytes. The other
+  // three are turned away earlier — by a dot, or by not being base64 at all —
+  // so as a `by` host, which is never read for an identifier, it left the gate
+  // itself with no coverage at all. Removing that line broke no test.
   const headers = parseHeaders(
     'Received: from o8.ptr6101.mail.example.com by mx.example.net with ESMTPS id a\n'
     + 'Received: by recvd-canary-54f88fd5bd-wpf6s with SMTP id b\n'
-    + 'Received: from mta-in-02 by gateway-99 with SMTP id c\n',
+    + 'Received: from mta-in-02 by gateway-99 with SMTP id c\n'
+    + 'Received: from gateway-99 by mx.example.net with SMTP id d\n',
   );
   for (const hop of analyse(headers).find((f) => f.id === 'route').items) {
     assert.equal(hop.note, null, `${hop.value} was misread as encoded`);

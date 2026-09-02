@@ -1759,4 +1759,65 @@ function decodeMailCharsetDisabledByMutation(bytes, label) {
     // word raw; with fatal:false it kept that promise only for a charset label
     // the runtime had never heard of.
   },
+
+  {
+    id: 'empty-file-answers-with-nothing',
+    promise: 'A file this page cannot make a report out of says so; it never just fails to change.',
+    file: 'js/app.js',
+    find: `  if (!text.trim()) {`,
+    replace: `  if (false) {`,
+    mustKill: ['a file with nothing in it says so rather than doing nothing'],
+    // `run()` clears the report and returns on blank input, so an empty file —
+    // or a dropped folder — left the reader watching a page that did not move.
+  },
+
+  {
+    id: 'file-size-ceiling-excludes-the-boundary',
+    promise: 'A file of exactly 32 MB is read; the ceiling is inclusive.',
+    file: 'js/app.js',
+    find: `  if (file.size > MAX_FILE_BYTES) {`,
+    replace: `  if (file.size >= MAX_FILE_BYTES) {`,
+    mustKill: ['a file of exactly the ceiling is read; one byte more is not'],
+    // Which way a boundary falls is decided once and then has to stay decided;
+    // `>` and `>=` differ by one message and by nothing a reader could see.
+  },
+
+  {
+    id: 'extra-dropped-files-go-unmentioned',
+    promise: 'When several files arrive at once, the report says which one it is about.',
+    file: 'js/app.js',
+    find: `  if (others > 0) {`,
+    replace: `  if (false) {`,
+    mustKill: ['several files at once: the first is read, and the rest are accounted for'],
+    // Reading the first silently left a report that looked as though it covered
+    // the whole stack the reader had dropped on the page.
+  },
+
+  {
+    id: 'a-new-reading-appends-to-the-old-report',
+    promise: 'A reading replaces the report before it, so no verdict outlives the message it was about.',
+    file: 'js/app.js',
+    find: `function run() {
+  const pasted = input.value;
+  results.replaceChildren();`,
+    replace: `function run() {
+  const pasted = input.value;`,
+    mustKill: ['a verdict for a message the reader has moved on from never reaches the next report'],
+    // The blocklist check is asynchronous and its row is captured per render.
+    // What keeps a late verdict about a host in a message that is no longer on
+    // screen off the next report is that its list was detached.
+  },
+
+  {
+    id: 'encoded-identifier-decodes-to-anything',
+    promise: 'A hostname forced through base64 is never reported as an encoded identifier.',
+    file: 'js/decode.js',
+    find: `  if (!/^[\\x20-\\x7E]+$/.test(decoded)) return null;`,
+    replace: '',
+    mustKill: ['an ordinary hostname is never reported as an encoded identifier'],
+    // decodeIdentifier is all-or-nothing by character class, not by
+    // readability: an account number decodes to prose scoring the same 0.40 as
+    // the control bytes a real hostname yields. That gate had two behaviour
+    // tests and no mutation.
+  },
 ];

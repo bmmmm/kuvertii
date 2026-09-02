@@ -340,7 +340,7 @@ function clear() {
  * line, sometimes the sender, and this page does not put either on screen
  * unless the message itself said so.
  */
-async function readMessageFile(file) {
+async function readMessageFile(file, others = 0) {
   if (!file) return;
   if (file.size > MAX_FILE_BYTES) {
     status.textContent = 'That file is larger than 32 MB, which no message reaches. It was not read — open the message file itself rather than an archive or a mailbox.';
@@ -365,8 +365,27 @@ async function readMessageFile(file) {
     status.textContent = `That file could not be read, so nothing on this page is about it. Try opening it again, or paste the message instead. (${error?.name || 'the read failed'})`;
     return;
   }
+  // An empty file is the one refusal that used to answer with nothing at all:
+  // `run()` clears the report and returns on blank input, so the reader who
+  // opened a file watched the page not change and could not tell whether it had
+  // worked. Said before `run()`, because `run()` blanks the status line itself.
+  // The wording covers a folder too — dropping one hands over something the
+  // browser will not read, and "empty" alone would be an odd thing to say
+  // about it.
+  if (!text.trim()) {
+    status.textContent = 'There was no message in that. The file is empty, or what was opened was a folder rather than a file — nothing was read.';
+    return;
+  }
+
   input.value = text;
   run();
+
+  // A drop can carry a stack of files, and so can a picker. One report is about
+  // one message, so the others are not read — which has to be said, or the
+  // report reads as though it covered all of them.
+  if (others > 0) {
+    status.textContent += ` Only the first of ${others + 1} files was read — open the others one at a time.`;
+  }
 }
 
 document.querySelector('#analyse').addEventListener('click', run);
@@ -392,12 +411,12 @@ input.addEventListener('paste', () => {
 input.addEventListener('focus', () => inputArea.classList.remove('input-area--read'));
 
 fileInput.addEventListener('change', (event) => {
-  const file = event.target.files?.[0];
+  const chosen = event.target.files ?? [];
   // Cleared before the read, not after it: the element otherwise keeps the
   // chosen file's name in the DOM, and picking the same file a second time
   // would fire no event at all because the value did not change.
   fileInput.value = '';
-  readMessageFile(file);
+  readMessageFile(chosen[0], Math.max(0, chosen.length - 1));
 });
 
 /**
@@ -454,7 +473,8 @@ window.addEventListener('drop', (event) => {
   event.preventDefault();
   dragsInside = 0;
   inputArea.classList.remove('input-area--drop');
-  readMessageFile(event.dataTransfer?.files?.[0]);
+  const dropped = event.dataTransfer?.files ?? [];
+  readMessageFile(dropped[0], Math.max(0, dropped.length - 1));
 });
 
 // Browsers restore form fields on reload and on back-navigation. For this page
