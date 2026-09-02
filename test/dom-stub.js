@@ -49,6 +49,18 @@ export function fire(node, type, event = {}) {
   return fake;
 }
 
+/**
+ * A File as this page uses it: a size to check and bytes to await — UTF-8 from
+ * `text` unless `bytes` are given. No text() on purpose: the browser's own
+ * UTF-8 decode is exactly what the page must not use on a message file.
+ */
+export function stubFile(text, size, bytes = new TextEncoder().encode(text)) {
+  return {
+    size: size ?? bytes.byteLength,
+    async arrayBuffer() { return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength); },
+  };
+}
+
 /** Flatten the rendered tree into text, the way a reader would see it. */
 export function renderedText(node) {
   return [node.textContent, ...node.children.map(renderedText)].filter(Boolean).join('\n');

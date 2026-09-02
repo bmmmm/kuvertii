@@ -8,23 +8,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { byClass, fire, loadApp, renderedText } from './dom-stub.js';
+import { byClass, fire, loadApp, renderedText, stubFile } from './dom-stub.js';
 import { BULK_HEADER, RECIPIENT } from './fixtures.js';
 
 /** Let a `setTimeout(…, 0)` and any pending microtask run. */
 const settle = () => new Promise((resolve) => { setTimeout(resolve, 0); });
-
-/**
- * A File as this page uses it: a size to check and bytes to await — UTF-8 from
- * `text` unless `bytes` are given. No text() on purpose: the browser's own
- * UTF-8 decode is exactly what the page must not use on a message file.
- */
-function stubFile(text, size, bytes = new TextEncoder().encode(text)) {
-  return {
-    size: size ?? bytes.byteLength,
-    async arrayBuffer() { return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength); },
-  };
-}
 
 /** The findings' cards, without the overview that leads them. */
 const cardsOf = (results) => results.children.slice(1);
