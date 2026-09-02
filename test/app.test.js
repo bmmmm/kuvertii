@@ -8,47 +8,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { byClass, fire, loadApp, renderedText } from './dom-stub.js';
 import { BULK_HEADER, RECIPIENT } from './fixtures.js';
-
-function stubNode(tag = 'div') {
-  const node = {
-    tag,
-    className: '',
-    textContent: '',
-    hidden: false,
-    // `<details>` state, and the two things a jump does to a card. Recorded
-    // rather than ignored: "the report is brought into view" is a promise now,
-    // and a spy that swallows the call cannot tell whether it was kept.
-    open: false,
-    scrolledIntoView: [],
-    clicks: 0,
-    children: [],
-    classList: {
-      add(...c) { node.className += ` ${c.join(' ')}`; },
-      remove(...c) {
-        node.className = node.className.split(/\s+/)
-          .filter((name) => name && !c.includes(name))
-          .join(' ');
-      },
-      contains(name) { return node.className.split(/\s+/).includes(name); },
-    },
-    append(...kids) { node.children.push(...kids); },
-    replaceChildren(...kids) { node.children = kids; },
-    addEventListener(type, handler) { (node.handlers[type] ??= []).push(handler); },
-    focus() { globalThis.document.activeElement = node; },
-    click() { node.clicks += 1; },
-    scrollIntoView(options) { node.scrolledIntoView.push(options); },
-    handlers: {},
-  };
-  return node;
-}
-
-/** Fire every handler registered for `type`, with an event the page can use. */
-function fire(node, type, event = {}) {
-  const fake = { defaultPrevented: false, preventDefault() { fake.defaultPrevented = true; }, ...event };
-  for (const handler of node.handlers[type] ?? []) handler(fake);
-  return fake;
-}
 
 /** Let a `setTimeout(…, 0)` and any pending microtask run. */
 const settle = () => new Promise((resolve) => { setTimeout(resolve, 0); });
@@ -68,54 +29,6 @@ function stubFile(text, size, bytes = new TextEncoder().encode(text)) {
 /** The findings' cards, without the overview that leads them. */
 const cardsOf = (results) => results.children.slice(1);
 const toneOf = (card) => card.className.split(/\s+/).find((c) => c.startsWith('card--'))?.slice(6);
-
-/** Flatten the rendered tree into text, the way a reader would see it. */
-function renderedText(node) {
-  return [node.textContent, ...node.children.map(renderedText)].filter(Boolean).join('\n');
-}
-
-/** Every node in the tree whose class list contains `name`. */
-function byClass(node, name) {
-  const here = node.className?.split(/\s+/).includes(name) ? [node] : [];
-  return [...here, ...node.children.flatMap((child) => byClass(child, name))];
-}
-
-async function loadApp({ wide = true } = {}) {
-  const nodes = {
-    '#header-input': stubNode('textarea'),
-    '#input-area': stubNode('section'),
-    '#file-input': stubNode('input'),
-    '#results': stubNode(),
-    '#empty-state': stubNode(),
-    '#status': stubNode(),
-    '#analyse': stubNode('button'),
-    '#clear': stubNode('button'),
-    '#open-file': stubNode('button'),
-  };
-  nodes['#header-input'].value = '';
-  nodes['#file-input'].value = '';
-  nodes['#file-input'].files = [];
-
-  globalThis.document = {
-    querySelector: (selector) => nodes[selector] ?? null,
-    createElement: (tag) => stubNode(tag),
-    activeElement: null,
-  };
-  // A real node, not `{ addEventListener() {} }`: the page registers handlers on
-  // `window` too — the drop guards and `pageshow` — and a stub that throws them
-  // away cannot be fired, so those paths had no test at all rather than a
-  // failing one. `wide` is the whole difference between a desktop report and a
-  // phone one: every non-alert card reads it once, at render time.
-  nodes.window = stubNode('window');
-  nodes.window.matchMedia = (media) => ({ media, matches: wide });
-  globalThis.window = nodes.window;
-  // The blocklist is fetched lazily; the stub keeps the smoke test offline.
-  globalThis.fetch = async () => { throw new Error('offline in tests'); };
-
-  // Fresh module instance per test — app.js wires listeners on import.
-  await import(`../js/app.js?t=${nodes ? Math.round(performance.now() * 1000) : 0}`);
-  return nodes;
-}
 
 test('the page wires up and renders findings for a pasted header', async () => {
   const nodes = await loadApp();
