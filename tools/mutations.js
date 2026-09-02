@@ -373,7 +373,7 @@ function neutraliseDisabledByMutation(text) {
     id: "percent-encoding-unknown",
     promise: "The encoding every click tracker uses is one this tool reads.",
     file: "js/decode.js",
-    find: "  if (/%[0-9A-F]{2}/i.test(raw)) {\n    offer(decodePercent(raw), 'percent-encoded');\n  }",
+    find: "  if (encodesAReservedByte(raw)) {\n    offer(decodePercent(raw), 'percent-encoded');\n  }",
     replace: "",
     mustKill: [
       "a percent-encoded address is an encoded copy like any other",
@@ -1692,5 +1692,22 @@ function decodeMailCharsetDisabledByMutation(bytes, label) {
     // The `persisted` condition had no coverage at all, so a reset on every
     // pageshow — which throws away the report the reader just produced — read
     // exactly like the fix.
+  },
+
+  {
+    id: 'percent-unreserved-byte-becomes-hidden-recipient',
+    promise: 'A printable %XX inside an opaque identifier is not read as an encoding.',
+    file: 'js/decode.js',
+    find: `    if (!UNRESERVED_BYTE_RE.test(String.fromCharCode(parseInt(hex, 16)))) return true;`,
+    replace: `    if (hex) return true;`,
+    mustKill: [
+      'a printable %XX in an opaque identifier is not a hidden recipient',
+      'an opaque id with one printable escape invents no recipient at all',
+    ],
+    // Round 11 on the next branch along. RFC 3986 §2.3 never encodes
+    // `ALPHA / DIGIT / - . _ ~`, so `%41` in a message-id encodes nothing; read
+    // as one it rewrote a character of the id, left the `@domain` that was
+    // legible all along, and put the result on an alert card as an address
+    // "recoverable only by decoding".
   },
 ];

@@ -29,6 +29,30 @@ const WORD_RE = /[A-Za-z]{4,}/;
 // a genuine `=C3=BC` (0xC3 0xBC = ü) has its high bytes and survives.
 const QP_HIGH_BYTE_RE = /=[89A-F][0-9A-F]/i;
 
+// The same trap one branch along, and the same answer. RFC 3986 §2.3 calls
+// `ALPHA / DIGIT / - . _ ~` unreserved and says they are never to be encoded,
+// so no conformant encoder writes `%41` for `A`. A run of printable escapes is
+// therefore not percent-encoding — it is two hex digits following a literal `%`
+// inside an opaque tracker id that already ends in `@domain`. Decoding it
+// rewrites one character of the id, leaves the `@domain` that was legible all
+// along, and the address that falls out is announced as a recipient
+// "recoverable only by decoding" in the sharpest words the card has, over a
+// token that never encoded anything: `X-Track-ID: abcn%41xy@example.org` was
+// enough to produce an alert.
+//
+// One escape carrying a byte outside that set is enough to count, so the case
+// this branch exists for is untouched: `%40` is `@`, and the double-encoded
+// `%2540` starts `%25`, which is `%`. Both are reserved.
+const PERCENT_ESCAPE_RE = /%([0-9A-F]{2})/gi;
+const UNRESERVED_BYTE_RE = /[A-Za-z0-9\-._~]/;
+
+function encodesAReservedByte(text) {
+  for (const [, hex] of text.matchAll(PERCENT_ESCAPE_RE)) {
+    if (!UNRESERVED_BYTE_RE.test(String.fromCharCode(parseInt(hex, 16)))) return true;
+  }
+  return false;
+}
+
 // Reversed text is still a syntactically valid address — `gro.elpmaxe@…` parses
 // exactly as well as `…@example.org`. A short list of real TLDs is what breaks
 // the tie and tells us which way round we are holding the string.
@@ -186,7 +210,7 @@ export function decodeCandidates(value) {
     offer(textFromBytes(decodeQuotedPrintable(raw)), 'quoted-printable');
   }
 
-  if (/%[0-9A-F]{2}/i.test(raw)) {
+  if (encodesAReservedByte(raw)) {
     offer(decodePercent(raw), 'percent-encoded');
   }
 

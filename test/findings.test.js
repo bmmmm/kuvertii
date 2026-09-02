@@ -966,6 +966,23 @@ test('an address written in the open is never called a hidden one', () => {
   assert.doesNotMatch(text(finding), /Carried \d+ further time/);
 });
 
+test('an opaque id with one printable escape invents no recipient at all', () => {
+  // The other half of the round-11 lesson, on the percent branch: `%41` is `A`,
+  // which RFC 3986 §2.3 says is never encoded. Reading it as an encoding turned
+  // a tracker id into an address that had been sitting in the header in plain
+  // sight, and put it on an alert card under "recoverable only by decoding" —
+  // the sharpest line the card has, over a token that hid nothing.
+  const finding = analyse(parseHeaders([
+    'From: shop@sender.example',
+    'X-Track-ID: abcn%41xy@example.org',
+  ].join('\n'))).find((f) => f.id === 'recipients');
+
+  assert.ok(
+    !finding || !text(finding).includes('recoverable only by decoding'),
+    `no address was hidden here: ${finding ? text(finding) : ''}`,
+  );
+});
+
 test('an unbalanced parenthesis does not erase the receiving server', () => {
   // Comments are stripped before the clause is read, and an unterminated one
   // swallowed everything after it — so a single stray `(`, written by whoever

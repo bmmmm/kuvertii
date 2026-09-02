@@ -264,6 +264,30 @@ test('a malformed percent sequence decodes to nothing', () => {
   assert.deepEqual(decodeCandidates('discount%ZZoffer%2'), []);
 });
 
+test('a printable %XX in an opaque identifier is not a hidden recipient', () => {
+  // RFC 3986 §2.3 calls `ALPHA / DIGIT / - . _ ~` unreserved and says they are
+  // never to be encoded, so a printable escape is not percent-encoding — it is
+  // two hex digits after a literal `%`, inside a message-id that already ends
+  // in `@domain`. Decoding rewrote one character of the id, left the domain
+  // that was legible all along, and the address that fell out was announced as
+  // a recipient recovered by decoding. Exactly the trap QP_HIGH_BYTE_RE closed
+  // for quoted-printable, one branch along.
+  for (const escape of ['%41', '%61', '%30', '%2D', '%2E', '%5F', '%7E']) {
+    assert.deepEqual(
+      decodeCandidates(`CAE${escape}d3f9a0c1e2d4b5a6c7e8@mail.gmail.com`),
+      [],
+      `${escape} carries an unreserved byte, so nothing here was ever encoded`,
+    );
+  }
+
+  // One escaped byte outside that set is enough, so what the branch exists for
+  // stands: `%40` is `@`, `%2540` starts with `%25`, which is `%`.
+  for (const escape of ['%40', '%25', '%20']) {
+    const [best] = decodeCandidates(`recipient${escape}name@example-mail.de`);
+    assert.equal(best?.method, 'percent-encoded', `${escape} is a byte an encoder had to write`);
+  }
+});
+
 test('adjacent encoded-words join without the whitespace a client removes', () => {
   // RFC 2047 §6.2: whitespace between two adjacent encoded-words exists only to
   // let a long run be split across words (and folded lines), and is removed on
