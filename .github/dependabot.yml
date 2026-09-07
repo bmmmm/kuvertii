@@ -10,3 +10,9 @@ updates:
       prefix: chore(deps)
     labels:
       - dependencies
+    cooldown:
+      default-days: 3
+    groups:
+      actions:
+        patterns:
+          - "*"
