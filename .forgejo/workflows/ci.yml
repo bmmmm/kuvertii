@@ -1,0 +1,21 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: docker
+    timeout-minutes: 45
+    # Node comes from the image (no setup-node on this runner). The tag is
+    # for humans, the digest is what actually pins the image.
+    container:
+      image: data.forgejo.org/oci/node:22-bookworm@sha256:18a6d90fd60542269850c80ca03b29b1d9b14d6b221ac7ee8e35b0d33ef904bd
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: node --test
+      # Mirrors the GitHub test job, which runs it on one Node version only:
+      # nothing it asserts is version-dependent.
+      - run: node tools/mutate.mjs
