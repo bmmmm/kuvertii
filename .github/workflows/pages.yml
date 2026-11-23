@@ -30,6 +30,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # `actions: read` lets the mutation step below look up earlier runs.
+    permissions:
+      contents: read
+      actions: read
     strategy:
       # The floor declared in package.json engines, and the version the deploy
       # actually runs on. A floor nothing exercises is a guess.
@@ -50,7 +54,28 @@ jobs:
       #
       # One version only: it runs the whole suite once per mutation, and
       # nothing it asserts is version-dependent.
-      - if: matrix.node == '24'
+      #
+      # The daily schedule skips it when a push run of this very commit already
+      # went green: that run executed it on the same tree, because the mutation
+      # copy holds git-tracked files only (see the header of tools/mutate.mjs)
+      # and the schedule changes none of them. It took 830 of the 845 seconds
+      # of this job in run 45023181377. Anything short of that proof runs it
+      # here as before: no such run (a scheduled run cancels a push run still
+      # in progress, see `concurrency` above), a red one, or a failed lookup.
+      - id: mutation
+        if: matrix.node == '24'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          proven=0
+          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            proven=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/pages.yml/runs?head_sha=$GITHUB_SHA&event=push&status=success&per_page=1" --jq .total_count) || proven=0
+          fi
+          case "$proven" in
+            '' | 0 | *[!0-9]*) echo "run=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "skipped: $proven green push run(s) of $GITHUB_SHA" ;;
+          esac
+      - if: steps.mutation.outputs.run == 'true'
         run: node tools/mutate.mjs
 
   deploy:
